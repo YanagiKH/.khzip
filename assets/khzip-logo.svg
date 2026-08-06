@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="280" viewBox="0 0 1040 280" role="img" aria-labelledby="title desc">
+  <title id="title">.khzip</title><desc id="desc">A shield and compressed archive mark beside the .khzip wordmark.</desc>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6d5dfc"/><stop offset="1" stop-color="#19b5a5"/></linearGradient></defs>
+  <rect width="1040" height="280" rx="40" fill="#0c1020"/>
+  <path d="M130 35 235 72v72c0 61-44 91-105 111C69 235 25 205 25 144V72z" fill="url(#g)"/>
+  <path d="M130 67v153c42-16 70-38 70-78V95z" fill="#0c1020" opacity=".35"/>
+  <g fill="none" stroke="#fff" stroke-width="12" stroke-linecap="round"><path d="M85 126h90M85 160h90"/><path d="M116 101v84M144 101v84"/></g>
+  <text x="285" y="180" fill="#f7f8ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="132" font-weight="750" letter-spacing="-5">.khzip</text>
+  <text x="294" y="224" fill="#9ca7c7" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="25" letter-spacing="4">COMPRESS · ENCRYPT · VERIFY</text>
+</svg>
