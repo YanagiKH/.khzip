@@ -1,8 +1,6 @@
-name: Bootstrap khzip v2 PR
+name: Validate khzip v2 PR
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
@@ -11,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  restore:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,31 +19,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Restore reviewed source bundle
-        shell: bash
+      - name: Format and refresh lockfile
         run: |
-          if [ ! -d .bootstrap ]; then
-            echo "Source bundle already applied"
-            exit 0
-          fi
-          cat .bootstrap/part-* | base64 --decode > /tmp/khzip-v2.tar.xz
-          tar -xJf /tmp/khzip-v2.tar.xz -C .
           cargo fmt --all
           cargo generate-lockfile
-          rm -rf .bootstrap
-          rm -f .github/workflows/bootstrap-v2.yml
-      - name: Commit implementation to PR branch
+      - name: Commit generated files
         shell: bash
         run: |
-          if git diff --quiet && git diff --cached --quiet; then
+          if git diff --quiet; then
             exit 0
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Implement container v2 and product design"
+          git add Cargo.lock src tests
+          git commit -m "Format v2 source and refresh dependency lockfile"
           git push origin HEAD:work/khzip-v2-product
-      - name: Initial validation
-        run: |
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked --all-targets
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked --all-targets
+      - name: Release build
+        run: cargo build --locked --release
