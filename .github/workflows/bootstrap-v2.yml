@@ -3,6 +3,8 @@ name: Bootstrap v2 source
 on:
   push:
     branches: [work/khzip-v2-product]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -34,7 +36,7 @@ jobs:
           git add -A
           git reset .github/workflows/bootstrap-v2.yml
           git commit -m "Implement container v2 and product design"
-          git push
+          git push origin HEAD:work/khzip-v2-product
       - name: Compile and test
         run: |
           cargo clippy --locked --all-targets -- -D warnings
