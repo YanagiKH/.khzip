@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   apply:
+    # One-time source restoration for the Draft PR; deleted before merge.
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
