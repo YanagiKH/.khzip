@@ -1,8 +1,9 @@
 use crate::{
     chunker::{stream_chunks, ChunkConfig},
     compress::{choose_codec, compress},
-    container::{ContainerReader, ContainerWriter, Header},
-    crypto::{self, KeyMaterial},
+    container::{read_header_and_slots, ContainerReader, ContainerWriter, Header},
+    crypto,
+    keyslot,
     model::{
         ArchiveFormat, ChunkIndex, CompressionMode, CustomCompression, EntryKind, FileEntry,
         Manifest, DEFAULT_AVG_CHUNK, DEFAULT_MAX_CHUNK, DEFAULT_MIN_CHUNK, FORMAT_VERSION,
@@ -26,6 +27,7 @@ pub struct CreateOptions {
     pub format: ArchiveFormat,
     pub mode: CompressionMode,
     pub password: Option<String>,
+    pub recipients: Vec<PathBuf>,
     pub custom: CustomCompression,
     pub split_size: u64,
 }
@@ -39,20 +41,21 @@ impl CreateOptions {
         );
         if self.format == ArchiveFormat::Khpak {
             anyhow::ensure!(
-                self.password.is_none(),
+                self.password.is_none() && self.recipients.is_empty(),
                 ".khpak does not support encryption"
             );
         }
         if self.format == ArchiveFormat::Khcz {
             anyhow::ensure!(
-                self.password.is_none(),
-                ".khcz uses the local device key and does not accept a password"
+                self.password.is_none() && self.recipients.is_empty(),
+                ".khcz uses the local device key and does not accept passwords or recipients"
             );
         }
         if self.format.requires_password() {
             anyhow::ensure!(
-                self.password.as_deref().is_some_and(|p| p.len() >= 12),
-                ".khaz requires a password of at least 12 characters"
+                self.password.as_deref().is_some_and(|p| p.len() >= 12)
+                    || !self.recipients.is_empty(),
+                ".khaz requires a password of at least 12 characters or at least one recipient"
             );
         }
         if let Some(password) = &self.password {
@@ -65,6 +68,26 @@ impl CreateOptions {
                 "password must contain at least 10 characters"
             );
         }
+        if !self.recipients.is_empty() {
+            anyhow::ensure!(
+                matches!(
+                    self.format,
+                    ArchiveFormat::Khz | ArchiveFormat::Khx | ArchiveFormat::Khaz
+                ),
+                "the selected format does not allow public-key recipients"
+            );
+            anyhow::ensure!(
+                self.recipients.len() <= 64,
+                "an archive supports at most 64 recipients"
+            );
+            for recipient in &self.recipients {
+                anyhow::ensure!(
+                    recipient.is_file(),
+                    "recipient key does not exist: {}",
+                    recipient.display()
+                );
+            }
+        }
         for input in &self.inputs {
             anyhow::ensure!(input.exists(), "input does not exist: {}", input.display());
         }
@@ -75,6 +98,7 @@ impl CreateOptions {
 #[derive(Debug, Clone, Default)]
 pub struct UnlockOptions {
     pub password: Option<String>,
+    pub identities: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,15 +119,25 @@ pub fn create_archive(options: &CreateOptions) -> Result<ArchiveSummary> {
     let temp_path = temp.path().to_path_buf();
     drop(temp);
 
-    let encrypted = options.password.is_some() || options.format == ArchiveFormat::Khcz;
+    let encrypted = options.password.is_some()
+        || !options.recipients.is_empty()
+        || options.format == ArchiveFormat::Khcz;
     let effective_mode = if matches!(options.format, ArchiveFormat::Khaz | ArchiveFormat::Khcz) {
         CompressionMode::Extreme
     } else {
         options.mode
     };
-    let header = Header::new(options.format, effective_mode, encrypted);
-    let keys = create_keys(&header, options.password.as_deref())?;
-    let mut writer = ContainerWriter::create(&temp_path, header, keys)?;
+    let mut header = Header::new(options.format, effective_mode, encrypted);
+    let setup = keyslot::create_archive_keys(
+        options.password.as_deref(),
+        &options.recipients,
+        &header.salt,
+        header.device_bound(),
+        encrypted,
+    )?;
+    header.set_key_slots(&setup.key_slots)?;
+    let mut writer =
+        ContainerWriter::create(&temp_path, header, setup.keys, &setup.key_slots)?;
     let chunk_config = chunk_config(options)?;
     let entries = collect_entries(&options.inputs)?;
     let mut manifest_files = Vec::with_capacity(entries.len());
@@ -293,14 +327,17 @@ pub fn extract_archive(
 }
 
 fn open_reader(path: &Path, unlock: &UnlockOptions) -> Result<ContainerReader> {
-    let mut raw = File::open(path)?;
-    let mut header_bytes = [0_u8; crate::container::HEADER_LEN];
-    raw.read_exact(&mut header_bytes)?;
-    drop(raw);
-    let header = parse_header_for_unlock(&header_bytes)?;
+    let (header, key_slots) = read_header_and_slots(path)?;
     let keys = if header.encrypted() {
         if header.device_bound() {
             Some(crypto::device_keys(&header.salt)?)
+        } else if header.has_key_slots() {
+            Some(keyslot::unlock_archive_keys(
+                unlock.password.as_deref(),
+                &unlock.identities,
+                &header.salt,
+                &key_slots,
+            )?)
         } else {
             let password = unlock
                 .password
@@ -311,36 +348,7 @@ fn open_reader(path: &Path, unlock: &UnlockOptions) -> Result<ContainerReader> {
     } else {
         None
     };
-    ContainerReader::open(path, keys)
-}
-
-fn parse_header_for_unlock(bytes: &[u8; crate::container::HEADER_LEN]) -> Result<Header> {
-    // ContainerReader validates the complete header and trailer. This minimal parse only determines key type.
-    anyhow::ensure!(&bytes[..8] == b"KHZIP001", "not a .khzip container");
-    let format = ArchiveFormat::try_from(bytes[10])?;
-    let mode = CompressionMode::try_from(bytes[11])?;
-    let flags = u32::from_le_bytes(bytes[12..16].try_into()?);
-    Ok(Header {
-        version: u16::from_le_bytes(bytes[8..10].try_into()?),
-        format,
-        mode,
-        flags,
-        salt: bytes[16..32].try_into()?,
-        nonce_prefix1: bytes[32..48].try_into()?,
-        nonce_prefix2: bytes[48..64].try_into()?,
-        index_offset: u64::from_le_bytes(bytes[64..72].try_into()?),
-        chunk_count: u64::from_le_bytes(bytes[72..80].try_into()?),
-        file_count: u64::from_le_bytes(bytes[80..88].try_into()?),
-    })
-}
-
-fn create_keys(header: &Header, password: Option<&str>) -> Result<Option<KeyMaterial>> {
-    if header.device_bound() {
-        return Ok(Some(crypto::device_keys(&header.salt)?));
-    }
-    password
-        .map(|value| crypto::password_keys(value, &header.salt))
-        .transpose()
+    ContainerReader::open_with_header(path, header, keys)
 }
 
 fn chunk_config(options: &CreateOptions) -> Result<ChunkConfig> {

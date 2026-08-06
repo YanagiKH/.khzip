@@ -1,76 +1,62 @@
 # Installation
 
-## Supported targets
+`.khzip` version 0.2 requires Rust 1.88 or newer.
 
-The CLI is intended for current stable Rust on Windows, macOS, and Linux. The desktop binary uses `eframe` and `rfd` and therefore requires native windowing libraries.
+## Cargo installation
 
-## Release scripts
+```bash
+cargo install --git https://github.com/YanagiKH/.khzip
+```
 
-The scripts under `install/` query the latest GitHub Release, download the matching archive and checksum file, verify SHA-256, and install the binaries into a user-writable directory.
+Desktop creator:
 
-Linux/macOS default destination: `$HOME/.local/bin`.
-
-Windows default destination: `%LOCALAPPDATA%\Programs\khzip`.
+```bash
+cargo install --git https://github.com/YanagiKH/.khzip --features gui --bin khzip-gui
+```
 
 ## Linux build dependencies
 
-Debian/Ubuntu:
+Debian or Ubuntu:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev libxkbcommon-dev
+sudo apt-get install -y build-essential pkg-config liblzma-dev libgtk-3-dev libxkbcommon-dev
 ```
 
-Fedora:
-
-```bash
-sudo dnf install -y gcc gcc-c++ pkgconf-pkg-config openssl-devel gtk3-devel libxkbcommon-devel
-```
-
-Arch Linux:
-
-```bash
-sudo pacman -S --needed base-devel pkgconf openssl gtk3 libxkbcommon
-```
-
-Then:
-
-```bash
-cargo build --release
-cargo build --release --features gui --bin khzip-gui
-```
+The CLI can be built without GTK packages. The GUI file dialog can use XDG Desktop Portal or GTK depending on the selected `rfd` backend and desktop environment.
 
 ## macOS
 
-Install Xcode Command Line Tools and Rust:
+Install the Rust toolchain through rustup, then build with Cargo. Xcode Command Line Tools are required for native linking.
 
 ```bash
 xcode-select --install
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo build --release
-cargo build --release --features gui --bin khzip-gui
 ```
 
 ## Windows
 
-Install Rust using `rustup-init.exe` and select the MSVC toolchain. Install Visual Studio Build Tools with Desktop development with C++.
+Install Rust with the MSVC target and Visual Studio Build Tools with the C++ workload.
 
 ```powershell
 cargo build --release
 cargo build --release --features gui --bin khzip-gui
 ```
 
-Optional right-click registration:
+## GitHub Release installers
+
+The scripts in `install/` select a matching release asset and verify its published SHA-256 file. They require an existing GitHub Release; source builds remain available before the first release is published.
+
+## Shell integration
+
+Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install\windows-context-menu.ps1
+powershell -ExecutionPolicy Bypass -File install/windows-context-menu.ps1
 ```
 
-## Verify a source installation
+Linux:
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-cargo build --release
+./install/linux-desktop-integration.sh
 ```

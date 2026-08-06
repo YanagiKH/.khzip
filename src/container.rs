@@ -1,7 +1,11 @@
 use crate::{
     compress,
-    crypto::{self, KeyMaterial, FLAG_DEVICE_BOUND, FLAG_DOUBLE_ENCRYPTED, FLAG_ENCRYPTED},
-    model::{ArchiveFormat, Codec, CompressionMode, Manifest, FORMAT_VERSION},
+    crypto::{
+        self, KeyMaterial, FLAG_DEVICE_BOUND, FLAG_DOUBLE_ENCRYPTED, FLAG_ENCRYPTED,
+        FLAG_KEY_SLOTS,
+    },
+    keyslot::MAX_KEY_SLOT_AREA,
+    model::{ArchiveFormat, Codec, CompressionMode, Manifest},
 };
 use anyhow::{anyhow, Context, Result};
 use std::{
@@ -11,6 +15,7 @@ use std::{
 };
 
 pub const HEADER_LEN: usize = 128;
+pub const CONTAINER_VERSION: u16 = 2;
 const HEADER_MAGIC: &[u8; 8] = b"KHZIP001";
 const RECORD_MAGIC: &[u8; 4] = b"KHR1";
 const TRAILER_MAGIC: &[u8; 8] = b"KHTRLR01";
@@ -20,6 +25,8 @@ const INNER_METADATA_LEN: usize = 41;
 const MAX_PLAIN_RECORD_LEN: u64 = 256 * 1024 * 1024;
 const RECORD_CHUNK: u8 = 1;
 const RECORD_MANIFEST: u8 = 2;
+const KNOWN_FLAGS: u32 =
+    FLAG_ENCRYPTED | FLAG_DOUBLE_ENCRYPTED | FLAG_DEVICE_BOUND | FLAG_KEY_SLOTS;
 
 #[derive(Debug, Clone)]
 pub struct Header {
@@ -33,6 +40,8 @@ pub struct Header {
     pub index_offset: u64,
     pub chunk_count: u64,
     pub file_count: u64,
+    pub key_slots_len: u64,
+    pub key_slots_hash: [u8; 32],
 }
 
 impl Header {
@@ -48,7 +57,7 @@ impl Header {
             flags |= FLAG_DEVICE_BOUND;
         }
         Self {
-            version: FORMAT_VERSION,
+            version: CONTAINER_VERSION,
             format,
             mode,
             flags,
@@ -58,6 +67,8 @@ impl Header {
             index_offset: 0,
             chunk_count: 0,
             file_count: 0,
+            key_slots_len: 0,
+            key_slots_hash: [0_u8; 32],
         }
     }
 
@@ -73,8 +84,34 @@ impl Header {
         self.flags & FLAG_DEVICE_BOUND != 0
     }
 
+    pub fn has_key_slots(&self) -> bool {
+        self.flags & FLAG_KEY_SLOTS != 0
+    }
+
+    pub fn set_key_slots(&mut self, bytes: &[u8]) -> Result<()> {
+        anyhow::ensure!(
+            self.version >= 2,
+            "key slots require container format version 2"
+        );
+        anyhow::ensure!(
+            bytes.len() <= MAX_KEY_SLOT_AREA,
+            "key-slot area exceeds safety limit"
+        );
+        if bytes.is_empty() {
+            self.flags &= !FLAG_KEY_SLOTS;
+            self.key_slots_len = 0;
+            self.key_slots_hash = [0_u8; 32];
+        } else {
+            anyhow::ensure!(self.encrypted(), "unencrypted archive cannot contain key slots");
+            self.flags |= FLAG_KEY_SLOTS;
+            self.key_slots_len = u64::try_from(bytes.len())?;
+            self.key_slots_hash = *blake3::hash(bytes).as_bytes();
+        }
+        Ok(())
+    }
+
     pub fn aad_prefix(&self) -> Vec<u8> {
-        let mut aad = Vec::with_capacity(72);
+        let mut aad = Vec::with_capacity(if self.version >= 2 { 112 } else { 72 });
         aad.extend_from_slice(HEADER_MAGIC);
         aad.extend_from_slice(&self.version.to_le_bytes());
         aad.push(self.format as u8);
@@ -83,6 +120,10 @@ impl Header {
         aad.extend_from_slice(&self.salt);
         aad.extend_from_slice(&self.nonce_prefix1);
         aad.extend_from_slice(&self.nonce_prefix2);
+        if self.version >= 2 {
+            aad.extend_from_slice(&self.key_slots_len.to_le_bytes());
+            aad.extend_from_slice(&self.key_slots_hash);
+        }
         aad
     }
 
@@ -99,6 +140,10 @@ impl Header {
         out[64..72].copy_from_slice(&self.index_offset.to_le_bytes());
         out[72..80].copy_from_slice(&self.chunk_count.to_le_bytes());
         out[80..88].copy_from_slice(&self.file_count.to_le_bytes());
+        if self.version >= 2 {
+            out[88..96].copy_from_slice(&self.key_slots_len.to_le_bytes());
+            out[96..128].copy_from_slice(&self.key_slots_hash);
+        }
         out
     }
 
@@ -106,20 +151,51 @@ impl Header {
         anyhow::ensure!(&bytes[..8] == HEADER_MAGIC, "not a .khzip container");
         let version = u16::from_le_bytes(bytes[8..10].try_into()?);
         anyhow::ensure!(
-            version == FORMAT_VERSION,
+            (1..=CONTAINER_VERSION).contains(&version),
             "unsupported container version {version}"
         );
+        let flags = u32::from_le_bytes(bytes[12..16].try_into()?);
+        anyhow::ensure!(flags & !KNOWN_FLAGS == 0, "unsupported container flags");
+        if version == 1 {
+            anyhow::ensure!(flags & FLAG_KEY_SLOTS == 0, "v1 archive has key-slot flag");
+        }
+        let key_slots_len = if version >= 2 {
+            u64::from_le_bytes(bytes[88..96].try_into()?)
+        } else {
+            0
+        };
+        let key_slots_hash = if version >= 2 {
+            bytes[96..128].try_into()?
+        } else {
+            [0_u8; 32]
+        };
+        anyhow::ensure!(
+            key_slots_len <= MAX_KEY_SLOT_AREA as u64,
+            "key-slot area exceeds safety limit"
+        );
+        anyhow::ensure!(
+            (flags & FLAG_KEY_SLOTS != 0) == (key_slots_len > 0),
+            "key-slot flag and length mismatch"
+        );
+        if key_slots_len == 0 {
+            anyhow::ensure!(
+                key_slots_hash == [0_u8; 32],
+                "empty key-slot area has a nonzero hash"
+            );
+        }
         Ok(Self {
             version,
             format: ArchiveFormat::try_from(bytes[10])?,
             mode: CompressionMode::try_from(bytes[11])?,
-            flags: u32::from_le_bytes(bytes[12..16].try_into()?),
+            flags,
             salt: bytes[16..32].try_into()?,
             nonce_prefix1: bytes[32..48].try_into()?,
             nonce_prefix2: bytes[48..64].try_into()?,
             index_offset: u64::from_le_bytes(bytes[64..72].try_into()?),
             chunk_count: u64::from_le_bytes(bytes[72..80].try_into()?),
             file_count: u64::from_le_bytes(bytes[80..88].try_into()?),
+            key_slots_len,
+            key_slots_hash,
         })
     }
 }
@@ -182,7 +258,31 @@ pub struct ContainerWriter {
 }
 
 impl ContainerWriter {
-    pub fn create(path: &Path, header: Header, keys: Option<KeyMaterial>) -> Result<Self> {
+    pub fn create(
+        path: &Path,
+        header: Header,
+        keys: Option<KeyMaterial>,
+        key_slots: &[u8],
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            header.encrypted() == keys.is_some(),
+            "archive encryption key requirement mismatch"
+        );
+        anyhow::ensure!(
+            header.key_slots_len == key_slots.len() as u64,
+            "key-slot length mismatch"
+        );
+        if key_slots.is_empty() {
+            anyhow::ensure!(
+                header.key_slots_hash == [0_u8; 32],
+                "empty key-slot hash mismatch"
+            );
+        } else {
+            anyhow::ensure!(
+                blake3::hash(key_slots).as_bytes() == &header.key_slots_hash,
+                "key-slot hash mismatch"
+            );
+        }
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -190,6 +290,7 @@ impl ContainerWriter {
             .write(true)
             .open(path)?;
         file.write_all(&header.encode())?;
+        file.write_all(key_slots)?;
         Ok(Self {
             file,
             header,
@@ -312,16 +413,20 @@ pub struct ContainerReader {
 
 impl ContainerReader {
     pub fn open(path: &Path, keys: Option<KeyMaterial>) -> Result<Self> {
-        let mut file = File::open(path)?;
-        verify_trailer(&mut file)?;
-        file.seek(SeekFrom::Start(0))?;
-        let mut bytes = [0_u8; HEADER_LEN];
-        file.read_exact(&mut bytes)?;
-        let header = Header::decode(&bytes)?;
+        let (header, _) = read_header_and_slots(path)?;
+        Self::open_with_header(path, header, keys)
+    }
+
+    pub(crate) fn open_with_header(
+        path: &Path,
+        header: Header,
+        keys: Option<KeyMaterial>,
+    ) -> Result<Self> {
         anyhow::ensure!(
             header.encrypted() == keys.is_some(),
             "archive unlock key requirement mismatch"
         );
+        let file = File::open(path)?;
         Ok(Self { file, header, keys })
     }
 
@@ -359,6 +464,8 @@ impl ContainerReader {
     }
 
     fn read_record_at(&mut self, offset: u64) -> Result<(RecordHeader, Vec<u8>)> {
+        let minimum = HEADER_LEN as u64 + self.header.key_slots_len;
+        anyhow::ensure!(offset >= minimum, "record offset points into container metadata");
         self.file.seek(SeekFrom::Start(offset))?;
         let mut bytes = [0_u8; RECORD_HEADER_LEN];
         self.file.read_exact(&mut bytes)?;
@@ -414,7 +521,40 @@ impl ContainerReader {
     }
 }
 
-fn verify_trailer(file: &mut File) -> Result<()> {
+pub fn read_header_and_slots(path: &Path) -> Result<(Header, Vec<u8>)> {
+    let mut file = File::open(path)?;
+    let trailer_index_offset = verify_trailer(&mut file)?;
+    file.seek(SeekFrom::Start(0))?;
+    let mut bytes = [0_u8; HEADER_LEN];
+    file.read_exact(&mut bytes)?;
+    let header = Header::decode(&bytes)?;
+    let slot_len = usize::try_from(header.key_slots_len).context("key-slot area too large")?;
+    let mut key_slots = vec![0_u8; slot_len];
+    file.read_exact(&mut key_slots)?;
+    if key_slots.is_empty() {
+        anyhow::ensure!(
+            header.key_slots_hash == [0_u8; 32],
+            "empty key-slot hash mismatch"
+        );
+    } else {
+        anyhow::ensure!(
+            blake3::hash(&key_slots).as_bytes() == &header.key_slots_hash,
+            "key-slot area hash mismatch"
+        );
+    }
+    let first_record = HEADER_LEN as u64 + header.key_slots_len;
+    anyhow::ensure!(
+        header.index_offset >= first_record,
+        "manifest offset points into container metadata"
+    );
+    anyhow::ensure!(
+        header.index_offset == trailer_index_offset,
+        "header and trailer manifest offsets differ"
+    );
+    Ok((header, key_slots))
+}
+
+fn verify_trailer(file: &mut File) -> Result<u64> {
     let len = file.metadata()?.len();
     anyhow::ensure!(
         len >= (HEADER_LEN + TRAILER_LEN) as u64,
@@ -444,5 +584,24 @@ fn verify_trailer(file: &mut File) -> Result<()> {
         hasher.finalize().as_bytes() == &trailer[16..48],
         "archive checksum mismatch"
     );
-    Ok(())
+    Ok(index_offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_v1_header_without_key_slots() {
+        let mut bytes = [0_u8; HEADER_LEN];
+        bytes[..8].copy_from_slice(HEADER_MAGIC);
+        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[10] = ArchiveFormat::Khz as u8;
+        bytes[11] = CompressionMode::Fast as u8;
+        let header = Header::decode(&bytes).unwrap();
+        assert_eq!(header.version, 1);
+        assert_eq!(header.key_slots_len, 0);
+        assert!(!header.has_key_slots());
+        assert_eq!(header.aad_prefix().len(), 72);
+    }
 }

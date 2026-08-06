@@ -1,8 +1,8 @@
 [package]
 name = "khzip"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.78"
+rust-version = "1.88"
 description = "Secure, versioned, content-defined compressed archives for cloud storage"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/YanagiKH/.khzip"
@@ -32,17 +32,19 @@ chacha20poly1305 = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 directories = "5.0"
 hex = "0.4"
+hpke = { version = "=0.14.0", default-features = true }
 postcard = { version = "1.0", features = ["alloc"] }
 rand = "0.8"
 rpassword = "7.3"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tempfile = "3.10"
 walkdir = "2.5"
 xz2 = "0.1"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 zstd = "0.13"
 eframe = { version = "0.31", optional = true }
-rfd = { version = "0.15", optional = true }
+rfd = { version = "0.17.2", optional = true }
 
 [profile.release]
 lto = "thin"

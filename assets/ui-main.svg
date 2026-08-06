@@ -1,13 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="t d">
-<title id="t">.khzip desktop interface preview</title><desc id="d">A desktop window showing selected files, archive format, compression mode, output, password, and create button.</desc>
-<rect width="1200" height="720" rx="28" fill="#0b1020"/><rect x="28" y="28" width="1144" height="664" rx="20" fill="#151c31" stroke="#303a58" stroke-width="2"/>
-<circle cx="62" cy="62" r="8" fill="#ff6b6b"/><circle cx="88" cy="62" r="8" fill="#ffd166"/><circle cx="114" cy="62" r="8" fill="#06d6a0"/>
-<text x="58" y="132" fill="#f5f7ff" font-family="Arial" font-size="44" font-weight="700">.khzip</text><text x="58" y="166" fill="#9aa6c5" font-family="Arial" font-size="18">Secure compressed archives for untrusted cloud storage</text>
-<rect x="58" y="198" width="150" height="44" rx="10" fill="#665cf6"/><text x="91" y="227" fill="white" font-family="Arial" font-size="17">Add files</text><rect x="222" y="198" width="150" height="44" rx="10" fill="#27304b"/><text x="248" y="227" fill="#e9edff" font-family="Arial" font-size="17">Add folder</text><rect x="386" y="198" width="110" height="44" rx="10" fill="#27304b"/><text x="421" y="227" fill="#e9edff" font-family="Arial" font-size="17">Clear</text>
-<rect x="58" y="260" width="1084" height="155" rx="12" fill="#0e1426" stroke="#303a58"/><text x="82" y="298" fill="#dbe1f6" font-family="monospace" font-size="17">D:\Projects\Game\Assets</text><text x="82" y="334" fill="#dbe1f6" font-family="monospace" font-size="17">D:\Documents\contracts.pdf</text><text x="82" y="370" fill="#dbe1f6" font-family="monospace" font-size="17">D:\Photos\2026</text>
-<text x="58" y="462" fill="#aab5d3" font-family="Arial" font-size="17">Format</text><rect x="58" y="478" width="230" height="48" rx="10" fill="#0e1426" stroke="#3b4667"/><text x="80" y="509" fill="#f3f5ff" font-family="Arial" font-size="18">.khcz — device bound</text>
-<text x="320" y="462" fill="#aab5d3" font-family="Arial" font-size="17">Compression</text><rect x="320" y="478" width="230" height="48" rx="10" fill="#0e1426" stroke="#3b4667"/><text x="342" y="509" fill="#f3f5ff" font-family="Arial" font-size="18">Extreme</text>
-<text x="58" y="567" fill="#aab5d3" font-family="Arial" font-size="17">Output</text><rect x="58" y="583" width="820" height="48" rx="10" fill="#0e1426" stroke="#3b4667"/><text x="80" y="614" fill="#f3f5ff" font-family="monospace" font-size="17">E:\Cloud\private-backup.khcz</text><rect x="894" y="583" width="120" height="48" rx="10" fill="#27304b"/><text x="922" y="614" fill="#e9edff" font-family="Arial" font-size="17">Browse</text>
-<defs><linearGradient id="x" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#665cf6"/><stop offset="1" stop-color="#19b5a5"/></linearGradient></defs><rect x="1028" y="478" width="114" height="153" rx="14" fill="url(#x)"/><text x="1051" y="548" fill="white" font-family="Arial" font-size="20" font-weight="700">Create</text><text x="1048" y="578" fill="white" font-family="Arial" font-size="20" font-weight="700">archive</text>
-<text x="58" y="670" fill="#7f8baa" font-family="Arial" font-size="15">Interface preview · actual platform rendering may differ</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">.khzip desktop creator</title>
+  <desc id="desc">A three-stage desktop interface for selecting content, archive policy, and password or recipient access.</desc>
+  <defs>
+    <linearGradient id="window" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#091422"/><stop offset="1" stop-color="#132a45"/></linearGradient>
+    <linearGradient id="primary" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#5de2c4"/><stop offset="1" stop-color="#72a8ff"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="22" stdDeviation="26" flood-opacity=".28"/></filter>
+  </defs>
+  <rect width="1200" height="720" fill="#06101c"/>
+  <g filter="url(#shadow)">
+    <rect x="100" y="52" width="1000" height="616" rx="28" fill="url(#window)" stroke="#284664"/>
+    <circle cx="136" cy="84" r="7" fill="#ff6b78"/><circle cx="160" cy="84" r="7" fill="#ffc95b"/><circle cx="184" cy="84" r="7" fill="#5de2a0"/>
+    <text x="140" y="145" fill="#f4f8ff" font-family="system-ui,sans-serif" font-size="38" font-weight="750">.khzip</text>
+    <text x="140" y="178" fill="#94abc4" font-family="system-ui,sans-serif" font-size="17">Private, verifiable archives for untrusted storage</text>
+
+    <g font-family="system-ui,sans-serif">
+      <rect x="140" y="215" width="920" height="120" rx="18" fill="#0d2137" stroke="#2a4968"/>
+      <circle cx="176" cy="250" r="15" fill="#5de2c4"/><text x="176" y="256" text-anchor="middle" fill="#07111f" font-size="16" font-weight="800">1</text>
+      <text x="205" y="257" fill="#f1f6fc" font-size="21" font-weight="700">Content</text>
+      <rect x="205" y="277" width="118" height="38" rx="10" fill="#183853"/><text x="264" y="302" text-anchor="middle" fill="#d9e8f6" font-size="15">Add files</text>
+      <rect x="336" y="277" width="128" height="38" rx="10" fill="#183853"/><text x="400" y="302" text-anchor="middle" fill="#d9e8f6" font-size="15">Add folder</text>
+      <text x="500" y="302" fill="#91abc4" font-size="15">Documents · Photos · 12.4 GB</text>
+
+      <rect x="140" y="352" width="440" height="195" rx="18" fill="#0d2137" stroke="#2a4968"/>
+      <circle cx="176" cy="389" r="15" fill="#72a8ff"/><text x="176" y="395" text-anchor="middle" fill="#07111f" font-size="16" font-weight="800">2</text>
+      <text x="205" y="396" fill="#f1f6fc" font-size="21" font-weight="700">Archive policy</text>
+      <text x="176" y="441" fill="#91abc4" font-size="14">Format</text><rect x="270" y="416" width="270" height="38" rx="9" fill="#172f49"/><text x="290" y="441" fill="#e7f0fa" font-size="15">.khz — General archive</text>
+      <text x="176" y="493" fill="#91abc4" font-size="14">Compression</text><rect x="270" y="468" width="270" height="38" rx="9" fill="#172f49"/><text x="290" y="493" fill="#e7f0fa" font-size="15">Balanced</text>
+      <text x="176" y="531" fill="#73e0c5" font-size="13">Streaming · deduplicated · atomic output</text>
+
+      <rect x="600" y="352" width="460" height="195" rx="18" fill="#0d2137" stroke="#2a4968"/>
+      <circle cx="636" cy="389" r="15" fill="#b58cff"/><text x="636" y="395" text-anchor="middle" fill="#07111f" font-size="16" font-weight="800">3</text>
+      <text x="665" y="396" fill="#f1f6fc" font-size="21" font-weight="700">Access</text>
+      <rect x="636" y="420" width="388" height="38" rx="9" fill="#172f49"/><text x="655" y="445" fill="#9eb5ca" font-size="15">Password ••••••••••••••••</text>
+      <rect x="636" y="472" width="188" height="42" rx="11" fill="#183853"/><text x="730" y="499" text-anchor="middle" fill="#d9e8f6" font-size="14">+ Recipient key</text>
+      <rect x="838" y="472" width="186" height="42" rx="11" fill="#173b47" stroke="#5de2c4"/><text x="931" y="499" text-anchor="middle" fill="#77e7cc" font-size="14">X-Wing recovery</text>
+      <text x="636" y="532" fill="#91abc4" font-size="13">Password and multiple recipients may coexist.</text>
+
+      <rect x="140" y="574" width="920" height="58" rx="15" fill="#0a1a2d"/>
+      <text x="170" y="610" fill="#91abc4" font-size="14">Output: cloud-backup.khz</text>
+      <rect x="842" y="583" width="190" height="40" rx="12" fill="url(#primary)"/><text x="937" y="609" text-anchor="middle" fill="#07111f" font-size="16" font-weight="800">Create archive</text>
+    </g>
+  </g>
 </svg>

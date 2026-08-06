@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use khzip::{
-    create_archive, extract_archive, list_archive, verify_archive, ArchiveFormat, CompressionMode,
-    CreateOptions, CustomCompression, UnlockOptions,
+    create_archive, extract_archive, generate_keypair, inspect_key, list_archive, verify_archive,
+    ArchiveFormat, CompressionMode, CreateOptions, CustomCompression, KeyAlgorithm, UnlockOptions,
 };
 use std::{env, path::PathBuf, str::FromStr};
 use zeroize::Zeroizing;
@@ -26,6 +26,10 @@ enum Command {
     Verify(ReadCommand),
     Formats,
     Doctor,
+    Key {
+        #[command(subcommand)]
+        command: KeyCommand,
+    },
     DeviceKey {
         #[command(subcommand)]
         command: DeviceKeyCommand,
@@ -56,6 +60,13 @@ struct CreateCommand {
         help = "Read password from an environment variable"
     )]
     password_env: Option<String>,
+    #[arg(
+        long,
+        value_name = "PUBLIC_KEY",
+        action = clap::ArgAction::Append,
+        help = "Add a recipient public key; repeat for multiple recipients"
+    )]
+    recipient: Vec<PathBuf>,
     #[arg(long, default_value_t = 104_857_600)]
     split_size: u64,
     #[arg(long, default_value_t = 9)]
@@ -100,6 +111,30 @@ struct UnlockArgs {
         help = "Read password from an environment variable"
     )]
     password_env: Option<String>,
+    #[arg(
+        long,
+        value_name = "SECRET_KEY",
+        action = clap::ArgAction::Append,
+        help = "Try a recipient secret key; repeat to supply multiple identities"
+    )]
+    identity: Vec<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum KeyCommand {
+    Generate {
+        #[arg(long, default_value = "x-wing")]
+        algorithm: String,
+        #[arg(long)]
+        public: PathBuf,
+        #[arg(long)]
+        secret: PathBuf,
+        #[arg(long)]
+        force: bool,
+    },
+    Inspect {
+        key: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -130,7 +165,7 @@ fn run() -> Result<()> {
             let password = read_password(
                 command.password,
                 command.password_env.as_deref(),
-                format.requires_password(),
+                format.requires_password() && command.recipient.is_empty(),
             )?;
             let summary = create_archive(&CreateOptions {
                 inputs: command.inputs,
@@ -138,6 +173,7 @@ fn run() -> Result<()> {
                 format,
                 mode,
                 password: password.map(|value| value.to_string()),
+                recipients: command.recipient,
                 custom: CustomCompression {
                     zstd_level: command.zstd_level,
                     brotli_quality: command.brotli_quality,
@@ -199,6 +235,27 @@ fn run() -> Result<()> {
         }
         Command::Formats => print_formats(),
         Command::Doctor => doctor()?,
+        Command::Key { command } => match command {
+            KeyCommand::Generate {
+                algorithm,
+                public,
+                secret,
+                force,
+            } => {
+                let algorithm = KeyAlgorithm::from_str(&algorithm)?;
+                let info = generate_keypair(algorithm, &public, &secret, force)?;
+                println!("algorithm: {}", info.algorithm);
+                println!("fingerprint: {}", hex::encode(info.fingerprint));
+                println!("public key: {}", public.display());
+                println!("secret key: {}", secret.display());
+            }
+            KeyCommand::Inspect { key } => {
+                let info = inspect_key(&key)?;
+                println!("algorithm: {}", info.algorithm);
+                println!("fingerprint: {}", hex::encode(info.fingerprint));
+                println!("contains secret: {}", info.has_secret);
+            }
+        },
         Command::DeviceKey { command } => match command {
             DeviceKeyCommand::Init { force } => println!(
                 "device key initialized at {}",
@@ -216,6 +273,7 @@ fn unlock_options(args: &UnlockArgs) -> Result<UnlockOptions> {
     Ok(UnlockOptions {
         password: read_password(args.password, args.password_env.as_deref(), false)?
             .map(|value| value.to_string()),
+        identities: args.identity.clone(),
     })
 }
 
@@ -238,11 +296,12 @@ fn read_password(
 }
 
 fn print_formats() {
-    println!(".khz   general-purpose archive; optional password encryption");
+    println!(".khz   general-purpose archive; password and/or recipient encryption");
     println!(".khpak readable unencrypted asset/package archive");
-    println!(".khx   split archive; optional password encryption");
+    println!(".khx   split archive; password and/or recipient encryption");
     println!(".khaz  extreme compression plus two authenticated encryption layers");
     println!(".khcz  extreme device-bound archive using the local device key");
+    println!("recipient algorithms: X25519, ML-KEM-768, and X-Wing hybrid post-quantum");
 }
 
 fn doctor() -> Result<()> {
@@ -252,6 +311,10 @@ fn doctor() -> Result<()> {
         khzip::crypto::device_key_path()?.display()
     );
     println!("unsafe Rust: forbidden");
-    println!("container version: 1");
+    println!(
+        "container version: {}",
+        khzip::container::CONTAINER_VERSION
+    );
+    println!("key slots: password, X25519, ML-KEM-768, X-Wing");
     Ok(())
 }

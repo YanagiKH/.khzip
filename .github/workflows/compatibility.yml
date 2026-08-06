@@ -1,0 +1,47 @@
+name: Compatibility
+
+on:
+  push:
+    branches: [main, "agent/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  v1-reader:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current source
+        uses: actions/checkout@v4
+        with:
+          path: current
+      - name: Check out released v1 implementation
+        uses: actions/checkout@v4
+        with:
+          ref: be7f341b0e945ebd991cadb9f96b9ad97f32c791
+          path: v1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            current
+            v1
+      - name: Build both readers
+        run: |
+          cargo build --manifest-path v1/Cargo.toml
+          cargo build --manifest-path current/Cargo.toml
+      - name: Create a v1 password archive
+        env:
+          KHZIP_COMPAT_PASSWORD: correct-horse-battery-staple
+        run: |
+          mkdir fixture
+          printf 'v1 compatibility fixture\n' > fixture/data.txt
+          v1/target/debug/khzip create fixture/data.txt --output fixture/v1.khz --password-env KHZIP_COMPAT_PASSWORD
+      - name: Verify and extract with current code
+        env:
+          KHZIP_COMPAT_PASSWORD: correct-horse-battery-staple
+        run: |
+          current/target/debug/khzip verify fixture/v1.khz --password-env KHZIP_COMPAT_PASSWORD
+          current/target/debug/khzip extract fixture/v1.khz --output fixture/restored --password-env KHZIP_COMPAT_PASSWORD
+          cmp fixture/data.txt fixture/restored/data.txt

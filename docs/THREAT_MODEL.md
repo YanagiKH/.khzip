@@ -1,63 +1,42 @@
-# Threat Model
+# Threat model
 
-## Security goals
+## Protected
 
-For password-encrypted `.khz` and `.khx`, `.khaz`, and `.khcz` archives:
+For encrypted archives, `.khzip` is designed to protect file contents, paths, sizes, chunk identities, compression metadata, and the manifest from a storage provider or attacker who possesses only the archive.
 
-- Hide file contents, names, paths, file sizes, chunk identities, chunk plaintext lengths, and codec choices from a cloud provider or storage attacker.
-- Detect record modification, reordering, substitution, truncation, and wrong-key use before releasing a record.
-- Detect accidental corruption across the complete container.
-- Prevent archive paths from escaping the selected extraction directory.
-- Avoid nonce reuse inside one archive.
-- Avoid memory-unsafe parser code by forbidding unsafe Rust in the project.
+Authenticated encryption detects record modification under the correct unlock key. Recipient slots let the random archive master key be recovered through a password, X25519, ML-KEM-768, or X-Wing identity.
 
-## Adversaries considered
+## Observable
 
-- A third-party cloud provider that can read, copy, delete, truncate, or modify archive bytes.
-- An attacker who obtains an encrypted archive but not its password or device key.
-- A malicious archive attempting absolute-path or `..` extraction.
-- Accidental bit rot, incomplete upload, or missing `.khx` part.
+An observer can see the container version, selected format and mode, flags, total object size, key-slot count and approximate slot sizes, recipient algorithm identifiers, truncated recipient fingerprints, record boundaries, record kinds, ordinals, ciphertext lengths, and manifest location. Splitting reveals part count and part sizes.
 
-## Out of scope
+## Not protected
 
-- A compromised endpoint while the archive is unlocked.
-- Keyloggers, screen capture, malware, swap/hibernation capture, or a hostile kernel.
-- Weak or reused user passwords.
-- Traffic analysis outside the archive, including cloud object names, upload time, and total object size.
-- Concealing record count, record kind/order, ciphertext length, record boundaries, format/mode flags, or the manifest location.
-- Secure deletion from SSDs, cloud snapshots, or filesystem journals.
-- Authenticity for `.khpak` or other unencrypted archives against an attacker able to recompute hashes.
-- Hardware-enforced non-exportability of `.khcz` keys. The current device key is a protected local file.
-- Deniability, steganography, or resistance to coercion.
+- A compromised endpoint while plaintext or keys are in use.
+- Keyloggers, malicious kernels, debugger access, or hostile firmware.
+- Loss of every password, device key, and recipient secret key.
+- Denial of service through deletion, truncation, or slot removal.
+- Traffic analysis from archive timing and size.
+- Authenticity of fully rewritten unencrypted archives.
+- Long-term cryptographic guarantees without future review and migration.
 
-## Important design decisions
+## Algorithm guidance
 
-### Compress before encrypt
+- X25519 provides classical security and compact interoperability.
+- ML-KEM-768 provides a pure post-quantum KEM based on the current standard family.
+- X-Wing combines ML-KEM-768 and X25519 and is the default recommendation where larger key material is acceptable.
 
-Compression and deduplication run before encryption. Encrypted records reveal neither the chunk ID nor codec metadata without successful manifest and record authentication. Total archive size remains observable.
+Post-quantum implementations and specifications can still change. Support does not replace independent review, ecosystem interoperability testing, or future algorithm migration.
 
-### Independent record authentication
+## Parser and extraction boundaries
 
-Each record is an independent AEAD message. Random access does not require decrypting all previous records, and corruption is localized. The nonce is deterministic only after a random archive prefix is selected; the prefix plus ordinal pair is unique within the archive.
+- Fixed maximum record plaintext and payload sizes.
+- Fixed maximum key-slot count and area size.
+- Unknown versions, algorithms, flags, codecs, and trailing slot bytes are rejected.
+- Absolute paths, parent components, NUL paths, and symbolic links are rejected.
+- Existing output files are not overwritten unless explicitly requested.
+- Archive creation uses a temporary file and atomic replacement where available.
 
-### `.khaz` layering
+## Operational requirements
 
-Two independent XChaCha20-Poly1305 layers are applied with domain-separated keys and nonce prefixes. This adds defense in depth but does not replace password strength, implementation review, or backups. Multiple encryption is not assumed to double a security level.
-
-### `.khcz` device binding
-
-`.khcz` derives its archive keys from a random local `device.key` and archive salt. The device key is created with owner-only permissions on Unix. Anyone who copies the key can decrypt the archive. Anyone who loses it cannot recover the archive.
-
-### No public-key claims yet
-
-HPKE/X25519 and ML-KEM-768 are not implemented in v1. Publishing recipient encryption without a stable key-slot specification, test vectors, downgrade protection, and independent review would create a misleading security promise.
-
-## Security checklist before stable release
-
-- Independent cryptographic and parser review.
-- Coverage-guided fuzzing of header, record, manifest, split-part, and extraction paths.
-- Cross-platform KAT/compatibility vectors.
-- Large-file, interrupted-write, low-disk, and out-of-memory testing.
-- Side-channel review of password failure and record parsing.
-- Recovery exercises for passwords and `.khcz` device-key backups.
-- Signed release provenance and reproducible-build investigation.
+Users should keep redundant archives, keep recovery credentials separately, run `khzip verify`, perform a test extraction, and retain source data until restoration has been confirmed.

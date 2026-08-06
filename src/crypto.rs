@@ -12,11 +12,18 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 pub const FLAG_ENCRYPTED: u32 = 1;
 pub const FLAG_DOUBLE_ENCRYPTED: u32 = 1 << 1;
 pub const FLAG_DEVICE_BOUND: u32 = 1 << 2;
+pub const FLAG_KEY_SLOTS: u32 = 1 << 3;
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct KeyMaterial {
     pub primary: [u8; 32],
     pub secondary: [u8; 32],
+}
+
+impl KeyMaterial {
+    pub fn from_master(master: &[u8; 32]) -> Self {
+        expand_keys(master)
+    }
 }
 
 pub fn random_array<const N: usize>() -> [u8; N] {
