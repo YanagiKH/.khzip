@@ -4,6 +4,7 @@ on:
   pull_request:
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -16,266 +17,244 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Download rustfmt-normalized source
+        uses: actions/download-artifact@v4
         with:
-          components: rustfmt
-      - name: Apply security and metadata hardening
+          name: formatted-source
+          path: /tmp/formatted-source
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 31088060848
+      - name: Restore normalized source and lockfile
+        run: |
+          rm -rf src tests
+          cp -R /tmp/formatted-source/src .
+          cp -R /tmp/formatted-source/tests .
+          cp /tmp/formatted-source/Cargo.lock Cargo.lock
+      - name: Apply security hardening
+        run: |
+          cat > /tmp/hardening.patch <<'PATCH'
+          diff --git a/src/archive.rs b/src/archive.rs
+          index 2f651be..285c81f 100644
+          --- a/src/archive.rs
+          +++ b/src/archive.rs
+          @@ -386,6 +386,12 @@ fn collect_entries(inputs: &[PathBuf]) -> Result<Vec<SourceEntry>> {
+               let mut entries = Vec::new();
+               let mut names = HashSet::new();
+               for input in inputs {
+          +        let input_metadata = fs::symlink_metadata(input)?;
+          +        anyhow::ensure!(
+          +            !input_metadata.file_type().is_symlink(),
+          +            "symbolic links are rejected: {}",
+          +            input.display()
+          +        );
+                   let canonical = fs::canonicalize(input)?;
+                   let root_name = input
+                       .file_name()
+          @@ -483,14 +489,21 @@ fn verify_manifest_header(header: &Header, manifest: &Manifest) -> Result<()> {
+                   manifest.mode == header.mode,
+                   "header and manifest mode mismatch"
+               );
+          -    anyhow::ensure!(
+          -        manifest.files.len() as u64 == header.file_count,
+          -        "file count mismatch"
+          -    );
+          -    anyhow::ensure!(
+          -        manifest.chunks.len() as u64 == header.chunk_count,
+          -        "chunk count mismatch"
+          -    );
+          +    if header.encrypted() {
+          +        anyhow::ensure!(
+          +            header.file_count == 0 && header.chunk_count == 0,
+          +            "encrypted header exposes unexpected counts"
+          +        );
+          +    } else {
+          +        anyhow::ensure!(
+          +            manifest.files.len() as u64 == header.file_count,
+          +            "file count mismatch"
+          +        );
+          +        anyhow::ensure!(
+          +            manifest.chunks.len() as u64 == header.chunk_count,
+          +            "chunk count mismatch"
+          +        );
+          +    }
+               Ok(())
+           }
+           
+          diff --git a/src/container.rs b/src/container.rs
+          index 30d7f08..fa8f9e5 100644
+          --- a/src/container.rs
+          +++ b/src/container.rs
+          @@ -16,6 +16,8 @@ const RECORD_MAGIC: &[u8; 4] = b"KHR1";
+           const TRAILER_MAGIC: &[u8; 8] = b"KHTRLR01";
+           const TRAILER_LEN: usize = 48;
+           const RECORD_HEADER_LEN: usize = 64;
+          +const INNER_METADATA_LEN: usize = 41;
+          +const MAX_PLAIN_RECORD_LEN: u64 = 256 * 1024 * 1024;
+           const RECORD_CHUNK: u8 = 1;
+           const RECORD_MANIFEST: u8 = 2;
+           
+          @@ -229,20 +231,29 @@ impl ContainerWriter {
+                   compressed: &[u8],
+               ) -> Result<u64> {
+                   let offset = self.file.stream_position()?;
+          +        anyhow::ensure!(
+          +            plain_len <= MAX_PLAIN_RECORD_LEN,
+          +            "record plaintext exceeds safety limit"
+          +        );
+          +        let encrypted = self.keys.is_some();
+                   let mut record = RecordHeader {
+                       kind,
+          -            codec,
+          -            flags: 0,
+          +            codec: if encrypted { Codec::None } else { codec },
+          +            flags: if encrypted { 1 } else { 0 },
+                       ordinal: self.ordinal,
+          -            plain_len,
+          +            plain_len: if encrypted { 0 } else { plain_len },
+                       payload_len: 0,
+          -            content_id: id,
+          +            content_id: if encrypted { [0_u8; 32] } else { id },
+                   };
+                   let payload = if let Some(keys) = &self.keys {
+          -            record.flags |= 1;
+          +            let mut inner = Vec::with_capacity(INNER_METADATA_LEN + compressed.len());
+          +            inner.push(codec as u8);
+          +            inner.extend_from_slice(&plain_len.to_le_bytes());
+          +            inner.extend_from_slice(&id);
+          +            inner.extend_from_slice(compressed);
+                       let aad = record.aad(&self.header);
+                       crypto::encrypt(
+          -                compressed,
+          +                &inner,
+                           keys,
+                           &self.header.nonce_prefix1,
+                           &self.header.nonce_prefix2,
+          @@ -262,8 +273,13 @@ impl ContainerWriter {
+           
+               pub fn finish(mut self, index_offset: u64, chunk_count: u64, file_count: u64) -> Result<()> {
+                   self.header.index_offset = index_offset;
+          -        self.header.chunk_count = chunk_count;
+          -        self.header.file_count = file_count;
+          +        if self.header.encrypted() {
+          +            self.header.chunk_count = 0;
+          +            self.header.file_count = 0;
+          +        } else {
+          +            self.header.chunk_count = chunk_count;
+          +            self.header.file_count = file_count;
+          +        }
+                   self.file.seek(SeekFrom::Start(0))?;
+                   self.file.write_all(&self.header.encode())?;
+                   self.file.flush()?;
+          @@ -361,7 +377,7 @@ impl ContainerReader {
+                           .as_ref()
+                           .ok_or_else(|| anyhow!("archive is encrypted"))?;
+                       let aad = record.aad(&self.header);
+          -            crypto::decrypt(
+          +            let inner = crypto::decrypt(
+                           &payload,
+                           keys,
+                           &self.header.nonce_prefix1,
+          @@ -369,9 +385,30 @@ impl ContainerReader {
+                           record.ordinal,
+                           &aad,
+                           self.header.double_encrypted(),
+          -            )
+          -            .map(|plain| (record, plain))
+          +            )?;
+          +            anyhow::ensure!(
+          +                inner.len() >= INNER_METADATA_LEN,
+          +                "encrypted record metadata is truncated"
+          +            );
+          +            let codec = Codec::try_from(inner[0])?;
+          +            let plain_len = u64::from_le_bytes(inner[1..9].try_into()?);
+          +            anyhow::ensure!(
+          +                plain_len <= MAX_PLAIN_RECORD_LEN,
+          +                "record plaintext exceeds safety limit"
+          +            );
+          +            let content_id = inner[9..41].try_into()?;
+          +            let decoded = RecordHeader {
+          +                codec,
+          +                plain_len,
+          +                content_id,
+          +                ..record
+          +            };
+          +            Ok((decoded, inner[INNER_METADATA_LEN..].to_vec()))
+                   } else {
+          +            anyhow::ensure!(
+          +                record.plain_len <= MAX_PLAIN_RECORD_LEN,
+          +                "record plaintext exceeds safety limit"
+          +            );
+                       Ok((record, payload))
+                   }
+               }
+          diff --git a/tests/integration.rs b/tests/integration.rs
+          index 8955ea4..fda308e 100644
+          --- a/tests/integration.rs
+          +++ b/tests/integration.rs
+          @@ -94,3 +94,55 @@ fn khpak_rejects_password() {
+               });
+               assert!(result.is_err());
+           }
+          +
+          +#[test]
+          +fn encrypted_record_headers_do_not_expose_chunk_metadata() {
+          +    let root = tempdir().unwrap();
+          +    let input = root.path().join("private.txt");
+          +    let content = b"confidential record metadata".repeat(2048);
+          +    fs::write(&input, &content).unwrap();
+          +    let archive = root.path().join("private.khz");
+          +
+          +    create_archive(&CreateOptions {
+          +        inputs: vec![input],
+          +        output: archive.clone(),
+          +        format: ArchiveFormat::Khz,
+          +        mode: CompressionMode::Balanced,
+          +        password: Some("correct horse battery staple".to_string()),
+          +        custom: CustomCompression::default(),
+          +        split_size: 1024 * 1024,
+          +    })
+          +    .unwrap();
+          +
+          +    let bytes = fs::read(archive).unwrap();
+          +    let chunk_id = blake3::hash(&content);
+          +    assert!(!bytes.windows(32).any(|window| window == chunk_id.as_bytes()));
+          +    assert_eq!(&bytes[72..88], &[0_u8; 16]);
+          +    assert_eq!(bytes[128 + 5], 0);
+          +    assert_eq!(&bytes[128 + 16..128 + 24], &[0_u8; 8]);
+          +    assert_eq!(&bytes[128 + 32..128 + 64], &[0_u8; 32]);
+          +}
+          +
+          +#[cfg(unix)]
+          +#[test]
+          +fn rejects_top_level_symbolic_links() {
+          +    use std::os::unix::fs::symlink;
+          +
+          +    let root = tempdir().unwrap();
+          +    let target = root.path().join("target.txt");
+          +    let link = root.path().join("link.txt");
+          +    fs::write(&target, "private").unwrap();
+          +    symlink(&target, &link).unwrap();
+          +
+          +    let result = create_archive(&CreateOptions {
+          +        inputs: vec![link],
+          +        output: root.path().join("archive.khz"),
+          +        format: ArchiveFormat::Khz,
+          +        mode: CompressionMode::Fast,
+          +        password: None,
+          +        custom: CustomCompression::default(),
+          +        split_size: 1024 * 1024,
+          +    });
+          +    assert!(result.is_err());
+          +}
+          +
+          PATCH
+          git apply /tmp/hardening.patch
+      - name: Update security workflow and documentation
         shell: python
         run: |
           from pathlib import Path
 
-          archive = Path("src/archive.rs")
-          text = archive.read_text()
-          old = '''    for input in inputs {
-              let canonical = fs::canonicalize(input)?;
-              let root_name = input
-          '''
-          new = '''    for input in inputs {
-              let input_metadata = fs::symlink_metadata(input)?;
-              anyhow::ensure!(
-                  !input_metadata.file_type().is_symlink(),
-                  "symbolic links are rejected: {}",
-                  input.display()
-              );
-              let canonical = fs::canonicalize(input)?;
-              let root_name = input
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-          old = '''    anyhow::ensure!(
-              manifest.files.len() as u64 == header.file_count,
-              "file count mismatch"
-          );
-          anyhow::ensure!(
-              manifest.chunks.len() as u64 == header.chunk_count,
-              "chunk count mismatch"
-          );
-          '''
-          new = '''    if header.encrypted() {
-              anyhow::ensure!(
-                  header.file_count == 0 && header.chunk_count == 0,
-                  "encrypted header exposes unexpected counts"
-              );
-          } else {
-              anyhow::ensure!(
-                  manifest.files.len() as u64 == header.file_count,
-                  "file count mismatch"
-              );
-              anyhow::ensure!(
-                  manifest.chunks.len() as u64 == header.chunk_count,
-                  "chunk count mismatch"
-              );
-          }
-          '''
-          assert old in text
-          archive.write_text(text.replace(old, new, 1))
-
-          container = Path("src/container.rs")
-          text = container.read_text()
-          text = text.replace(
-              "const RECORD_HEADER_LEN: usize = 64;\n",
-              "const RECORD_HEADER_LEN: usize = 64;\nconst INNER_METADATA_LEN: usize = 41;\nconst MAX_PLAIN_RECORD_LEN: u64 = 256 * 1024 * 1024;\n",
-              1,
-          )
-          old = '''        let mut record = RecordHeader {
-              kind,
-              codec,
-              flags: 0,
-              ordinal: self.ordinal,
-              plain_len,
-              payload_len: 0,
-              content_id: id,
-          };
-          let payload = if let Some(keys) = &self.keys {
-              record.flags |= 1;
-              let aad = record.aad(&self.header);
-              crypto::encrypt(
-                  compressed,
-                  keys,
-                  &self.header.nonce_prefix1,
-                  &self.header.nonce_prefix2,
-                  self.ordinal,
-                  &aad,
-                  self.header.double_encrypted(),
-              )?
-          } else {
-              compressed.to_vec()
-          };
-          '''
-          new = '''        anyhow::ensure!(
-              plain_len <= MAX_PLAIN_RECORD_LEN,
-              "record plaintext exceeds safety limit"
-          );
-          let encrypted = self.keys.is_some();
-          let mut record = RecordHeader {
-              kind,
-              codec: if encrypted { Codec::None } else { codec },
-              flags: if encrypted { 1 } else { 0 },
-              ordinal: self.ordinal,
-              plain_len: if encrypted { 0 } else { plain_len },
-              payload_len: 0,
-              content_id: if encrypted { [0_u8; 32] } else { id },
-          };
-          let payload = if let Some(keys) = &self.keys {
-              let mut inner = Vec::with_capacity(INNER_METADATA_LEN + compressed.len());
-              inner.push(codec as u8);
-              inner.extend_from_slice(&plain_len.to_le_bytes());
-              inner.extend_from_slice(&id);
-              inner.extend_from_slice(compressed);
-              let aad = record.aad(&self.header);
-              crypto::encrypt(
-                  &inner,
-                  keys,
-                  &self.header.nonce_prefix1,
-                  &self.header.nonce_prefix2,
-                  self.ordinal,
-                  &aad,
-                  self.header.double_encrypted(),
-              )?
-          } else {
-              compressed.to_vec()
-          };
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-          old = '''        self.header.index_offset = index_offset;
-          self.header.chunk_count = chunk_count;
-          self.header.file_count = file_count;
-          '''
-          new = '''        self.header.index_offset = index_offset;
-          if self.header.encrypted() {
-              self.header.chunk_count = 0;
-              self.header.file_count = 0;
-          } else {
-              self.header.chunk_count = chunk_count;
-              self.header.file_count = file_count;
-          }
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-          old = '''        if record.flags & 1 != 0 {
-              let keys = self
-                  .keys
-                  .as_ref()
-                  .ok_or_else(|| anyhow!("archive is encrypted"))?;
-              let aad = record.aad(&self.header);
-              crypto::decrypt(
-                  &payload,
-                  keys,
-                  &self.header.nonce_prefix1,
-                  &self.header.nonce_prefix2,
-                  record.ordinal,
-                  &aad,
-                  self.header.double_encrypted(),
-              )
-              .map(|plain| (record, plain))
-          } else {
-              Ok((record, payload))
-          }
-          '''
-          new = '''        if record.flags & 1 != 0 {
-              let keys = self
-                  .keys
-                  .as_ref()
-                  .ok_or_else(|| anyhow!("archive is encrypted"))?;
-              let aad = record.aad(&self.header);
-              let inner = crypto::decrypt(
-                  &payload,
-                  keys,
-                  &self.header.nonce_prefix1,
-                  &self.header.nonce_prefix2,
-                  record.ordinal,
-                  &aad,
-                  self.header.double_encrypted(),
-              )?;
-              anyhow::ensure!(
-                  inner.len() >= INNER_METADATA_LEN,
-                  "encrypted record metadata is truncated"
-              );
-              let codec = Codec::try_from(inner[0])?;
-              let plain_len = u64::from_le_bytes(inner[1..9].try_into()?);
-              anyhow::ensure!(
-                  plain_len <= MAX_PLAIN_RECORD_LEN,
-                  "record plaintext exceeds safety limit"
-              );
-              let content_id = inner[9..41].try_into()?;
-              let decoded = RecordHeader {
-                  codec,
-                  plain_len,
-                  content_id,
-                  ..record
-              };
-              Ok((decoded, inner[INNER_METADATA_LEN..].to_vec()))
-          } else {
-              anyhow::ensure!(
-                  record.plain_len <= MAX_PLAIN_RECORD_LEN,
-                  "record plaintext exceeds safety limit"
-              );
-              Ok((record, payload))
-          }
-          '''
-          assert old in text
-          container.write_text(text.replace(old, new, 1))
-
-          tests = Path("tests/integration.rs")
-          text = tests.read_text().rstrip()
-          text += '''
-
-          #[test]
-          fn encrypted_record_headers_do_not_expose_chunk_metadata() {
-              let root = tempdir().unwrap();
-              let input = root.path().join("private.txt");
-              let content = b"confidential record metadata".repeat(2048);
-              fs::write(&input, &content).unwrap();
-              let archive = root.path().join("private.khz");
-
-              create_archive(&CreateOptions {
-                  inputs: vec![input],
-                  output: archive.clone(),
-                  format: ArchiveFormat::Khz,
-                  mode: CompressionMode::Balanced,
-                  password: Some("correct horse battery staple".to_string()),
-                  custom: CustomCompression::default(),
-                  split_size: 1024 * 1024,
-              })
-              .unwrap();
-
-              let bytes = fs::read(archive).unwrap();
-              let chunk_id = blake3::hash(&content);
-              assert!(!bytes.windows(32).any(|window| window == chunk_id.as_bytes()));
-              assert_eq!(&bytes[72..88], &[0_u8; 16]);
-              assert_eq!(bytes[128 + 5], 0);
-              assert_eq!(&bytes[128 + 16..128 + 24], &[0_u8; 8]);
-              assert_eq!(&bytes[128 + 32..128 + 64], &[0_u8; 32]);
-          }
-
-          #[cfg(unix)]
-          #[test]
-          fn rejects_top_level_symbolic_links() {
-              use std::os::unix::fs::symlink;
-
-              let root = tempdir().unwrap();
-              let target = root.path().join("target.txt");
-              let link = root.path().join("link.txt");
-              fs::write(&target, "private").unwrap();
-              symlink(&target, &link).unwrap();
-
-              let result = create_archive(&CreateOptions {
-                  inputs: vec![link],
-                  output: root.path().join("archive.khz"),
-                  format: ArchiveFormat::Khz,
-                  mode: CompressionMode::Fast,
-                  password: None,
-                  custom: CustomCompression::default(),
-                  split_size: 1024 * 1024,
-              });
-              assert!(result.is_err());
-          }
-          '''
-          tests.write_text(text + "\n")
-
-          security = Path(".github/workflows/security.yml")
-          security.write_text('''name: Security
+          Path(".github/workflows/security.yml").write_text("""name: Security
 
           on:
             push:
@@ -302,35 +281,38 @@ jobs:
               steps:
                 - uses: actions/checkout@v4
                 - uses: EmbarkStudios/cargo-deny-action@v2
-          ''')
+          """)
 
           readme = Path("README.md")
           text = readme.read_text()
           old = "Encrypted formats encrypt compressed chunk records and the manifest containing filenames, directory structure, sizes, chunk IDs, and offsets. Every encrypted record has a unique XChaCha20 nonce derived from a random archive prefix and a monotonic record number. Record metadata is bound as associated data. The whole container also has a BLAKE3 corruption checksum."
           new = "Encrypted formats place the codec, plaintext length, BLAKE3 identity, compressed bytes, and manifest inside authenticated ciphertext. Filenames, paths, file sizes, chunk identities, and chunk plaintext lengths are therefore not stored in clear record headers. The container still reveals its version, selected format and mode, encryption flags, record kinds and ordinals, record boundaries, ciphertext lengths, total object size, and manifest location. Every encrypted record has a unique XChaCha20 nonce derived from a random archive prefix and a monotonic record number. Clear framing metadata is bound as associated data. The whole container also has a BLAKE3 corruption checksum."
-          assert old in text
+          if old not in text:
+              raise SystemExit("README security paragraph not found")
           readme.write_text(text.replace(old, new, 1))
 
           threat = Path("docs/THREAT_MODEL.md")
           text = threat.read_text()
           old = "- Hide file contents, names, paths, sizes, chunk identities, and index offsets from a cloud provider or storage attacker."
           new = "- Hide file contents, names, paths, file sizes, chunk identities, chunk plaintext lengths, and codec choices from a cloud provider or storage attacker."
-          assert old in text
+          if old not in text:
+              raise SystemExit("threat-model goal not found")
           text = text.replace(old, new, 1)
           marker = "- Traffic analysis outside the archive, including cloud object names, upload time, and total object size."
           replacement = marker + "\n- Concealing record count, record kind/order, ciphertext length, record boundaries, format/mode flags, or the manifest location."
-          assert marker in text
+          if marker not in text:
+              raise SystemExit("threat-model traffic-analysis line not found")
           threat.write_text(text.replace(marker, replacement, 1))
 
           spec = Path("docs/FORMAT.md")
           text = spec.read_text()
-          text = text.replace(
-              "| 72 | 8 | unique chunk count |\n| 80 | 8 | entry count |",
-              "| 72 | 8 | unique chunk count; zero for encrypted archives |\n| 80 | 8 | entry count; zero for encrypted archives |",
-              1,
-          )
+          old = "| 72 | 8 | unique chunk count |\n| 80 | 8 | entry count |"
+          new = "| 72 | 8 | unique chunk count; zero for encrypted archives |\n| 80 | 8 | entry count; zero for encrypted archives |"
+          if old not in text:
+              raise SystemExit("format count rows not found")
+          text = text.replace(old, new, 1)
           marker = "The record payload follows immediately. Encrypted payloads include the Poly1305 authentication tag generated by XChaCha20-Poly1305."
-          replacement = '''The record payload follows immediately. For unencrypted records, the codec, decompressed length, and BLAKE3 identity are stored in the clear header as listed above. For encrypted records, those three clear fields are normalized to zero and the actual metadata is prepended inside the authenticated ciphertext:
+          replacement = """The record payload follows immediately. For unencrypted records, the codec, decompressed length, and BLAKE3 identity are stored in the clear header as listed above. For encrypted records, those three clear fields are normalized to zero and the actual metadata is prepended inside the authenticated ciphertext:
 
           | Inner offset | Size | Field |
           |---:|---:|---|
@@ -339,9 +321,13 @@ jobs:
           | 9 | 32 | actual BLAKE3 identity |
           | 41 | variable | compressed bytes |
 
-          Encrypted payloads include the Poly1305 authentication tag generated by XChaCha20-Poly1305. Clear framing still exposes record kind, ordinal, encrypted payload length, record boundaries, and the manifest location.'''
-          assert marker in text
+          Encrypted payloads include the Poly1305 authentication tag generated by XChaCha20-Poly1305. Clear framing still exposes record kind, ordinal, encrypted payload length, record boundaries, and the manifest location."""
+          if marker not in text:
+              raise SystemExit("format record paragraph not found")
           spec.write_text(text.replace(marker, replacement, 1))
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - name: Normalize and lock dependencies
         run: |
           cargo fmt --all
