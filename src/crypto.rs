@@ -27,12 +27,12 @@ pub fn random_array<const N: usize>() -> [u8; N] {
 
 pub fn password_keys(password: &str, salt: &[u8; 16]) -> Result<KeyMaterial> {
     let params = Params::new(128 * 1024, 3, 1, Some(32))
-        .context("invalid Argon2 parameters")?;
+        .map_err(|error| anyhow!("invalid Argon2 parameters: {error}"))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut base = [0_u8; 32];
     argon2
         .hash_password_into(password.as_bytes(), salt, &mut base)
-        .context("Argon2id key derivation failed")?;
+        .map_err(|error| anyhow!("Argon2id key derivation failed: {error}"))?;
     let keys = expand_keys(&base);
     base.zeroize();
     Ok(keys)
