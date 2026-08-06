@@ -249,39 +249,10 @@ jobs:
           +
           PATCH
           git apply /tmp/hardening.patch
-      - name: Update security workflow and documentation
+      - name: Update documentation
         shell: python
         run: |
           from pathlib import Path
-
-          Path(".github/workflows/security.yml").write_text("""name: Security
-
-          on:
-            push:
-              branches: [main]
-            pull_request:
-            schedule:
-              - cron: "23 3 * * 1"
-            workflow_dispatch:
-
-          permissions:
-            contents: read
-
-          jobs:
-            audit:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: dtolnay/rust-toolchain@stable
-                - uses: taiki-e/install-action@cargo-audit
-                - run: cargo audit --locked
-
-            deny:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: EmbarkStudios/cargo-deny-action@v2
-          """)
 
           readme = Path("README.md")
           text = readme.read_text()
@@ -334,8 +305,7 @@ jobs:
           cargo generate-lockfile
       - name: Commit hardened source
         run: |
-          git rm .github/workflows/apply-hardening.yml
-          git add -A
+          git add Cargo.lock src tests README.md docs/THREAT_MODEL.md docs/FORMAT.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Harden encrypted metadata and normalize sources"
