@@ -1,15 +1,19 @@
 name: Validate khzip v2 PR
 
 on:
+  issues:
+    types: [opened]
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   validate:
+    if: github.event_name != 'issues' || github.event.issue.title == 'Run khzip v2 validation'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,3 +44,8 @@ jobs:
         run: cargo test --locked --all-targets
       - name: Release build
         run: cargo build --locked --release
+      - name: Close trigger issue
+        if: github.event_name == 'issues' && always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue close ${{ github.event.issue.number }} --comment "Validation workflow completed; see Actions for the result."
