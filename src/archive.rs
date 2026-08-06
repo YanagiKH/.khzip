@@ -386,6 +386,12 @@ fn collect_entries(inputs: &[PathBuf]) -> Result<Vec<SourceEntry>> {
     let mut entries = Vec::new();
     let mut names = HashSet::new();
     for input in inputs {
+        let input_metadata = fs::symlink_metadata(input)?;
+        anyhow::ensure!(
+            !input_metadata.file_type().is_symlink(),
+            "symbolic links are rejected: {}",
+            input.display()
+        );
         let canonical = fs::canonicalize(input)?;
         let root_name = input
             .file_name()
@@ -483,14 +489,21 @@ fn verify_manifest_header(header: &Header, manifest: &Manifest) -> Result<()> {
         manifest.mode == header.mode,
         "header and manifest mode mismatch"
     );
-    anyhow::ensure!(
-        manifest.files.len() as u64 == header.file_count,
-        "file count mismatch"
-    );
-    anyhow::ensure!(
-        manifest.chunks.len() as u64 == header.chunk_count,
-        "chunk count mismatch"
-    );
+    if header.encrypted() {
+        anyhow::ensure!(
+            header.file_count == 0 && header.chunk_count == 0,
+            "encrypted header exposes unexpected counts"
+        );
+    } else {
+        anyhow::ensure!(
+            manifest.files.len() as u64 == header.file_count,
+            "file count mismatch"
+        );
+        anyhow::ensure!(
+            manifest.chunks.len() as u64 == header.chunk_count,
+            "chunk count mismatch"
+        );
+    }
     Ok(())
 }
 

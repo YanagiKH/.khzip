@@ -72,13 +72,7 @@ pub fn encrypt(
         let mut outer_aad = Vec::with_capacity(aad.len() + 8);
         outer_aad.extend_from_slice(aad);
         outer_aad.extend_from_slice(b"outer-v1");
-        seal(
-            &keys.secondary,
-            prefix2,
-            ordinal,
-            &outer_aad,
-            &first,
-        )
+        seal(&keys.secondary, prefix2, ordinal, &outer_aad, &first)
     } else {
         Ok(first)
     }
@@ -97,13 +91,7 @@ pub fn decrypt(
         let mut outer_aad = Vec::with_capacity(aad.len() + 8);
         outer_aad.extend_from_slice(aad);
         outer_aad.extend_from_slice(b"outer-v1");
-        open(
-            &keys.secondary,
-            prefix2,
-            ordinal,
-            &outer_aad,
-            payload,
-        )?
+        open(&keys.secondary, prefix2, ordinal, &outer_aad, payload)?
     } else {
         payload.to_vec()
     };
@@ -120,10 +108,7 @@ fn seal(
     let cipher = XChaCha20Poly1305::new(key.into());
     let nonce = nonce(prefix, ordinal);
     cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload { msg: payload, aad },
-        )
+        .encrypt(XNonce::from_slice(&nonce), Payload { msg: payload, aad })
         .map_err(|_| anyhow!("authenticated encryption failed"))
 }
 
@@ -137,10 +122,7 @@ fn open(
     let cipher = XChaCha20Poly1305::new(key.into());
     let nonce = nonce(prefix, ordinal);
     cipher
-        .decrypt(
-            XNonce::from_slice(&nonce),
-            Payload { msg: payload, aad },
-        )
+        .decrypt(XNonce::from_slice(&nonce), Payload { msg: payload, aad })
         .map_err(|_| anyhow!("authentication failed: wrong key or modified archive"))
 }
 

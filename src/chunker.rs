@@ -68,11 +68,7 @@ fn cut_point(data: &[u8], config: ChunkConfig, eof: bool) -> usize {
 
     let scan_limit = data.len().min(config.max);
     let normal = config.avg.min(scan_limit);
-    let bits = config
-        .avg
-        .next_power_of_two()
-        .trailing_zeros()
-        .clamp(8, 30);
+    let bits = config.avg.next_power_of_two().trailing_zeros().clamp(8, 30);
     let strict_mask = (1_u64 << (bits + 1).min(62)) - 1;
     let loose_mask = (1_u64 << bits.saturating_sub(1).max(1)) - 1;
     let table = gear_table();

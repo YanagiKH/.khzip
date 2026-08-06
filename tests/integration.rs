@@ -94,3 +94,56 @@ fn khpak_rejects_password() {
     });
     assert!(result.is_err());
 }
+
+#[test]
+fn encrypted_record_headers_do_not_expose_chunk_metadata() {
+    let root = tempdir().unwrap();
+    let input = root.path().join("private.txt");
+    let content = b"confidential record metadata".repeat(2048);
+    fs::write(&input, &content).unwrap();
+    let archive = root.path().join("private.khz");
+
+    create_archive(&CreateOptions {
+        inputs: vec![input],
+        output: archive.clone(),
+        format: ArchiveFormat::Khz,
+        mode: CompressionMode::Balanced,
+        password: Some("correct horse battery staple".to_string()),
+        custom: CustomCompression::default(),
+        split_size: 1024 * 1024,
+    })
+    .unwrap();
+
+    let bytes = fs::read(archive).unwrap();
+    let chunk_id = blake3::hash(&content);
+    assert!(!bytes
+        .windows(32)
+        .any(|window| window == chunk_id.as_bytes()));
+    assert_eq!(&bytes[72..88], &[0_u8; 16]);
+    assert_eq!(bytes[128 + 5], 0);
+    assert_eq!(&bytes[128 + 16..128 + 24], &[0_u8; 8]);
+    assert_eq!(&bytes[128 + 32..128 + 64], &[0_u8; 32]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_top_level_symbolic_links() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let target = root.path().join("target.txt");
+    let link = root.path().join("link.txt");
+    fs::write(&target, "private").unwrap();
+    symlink(&target, &link).unwrap();
+
+    let result = create_archive(&CreateOptions {
+        inputs: vec![link],
+        output: root.path().join("archive.khz"),
+        format: ArchiveFormat::Khz,
+        mode: CompressionMode::Fast,
+        password: None,
+        custom: CustomCompression::default(),
+        split_size: 1024 * 1024,
+    });
+    assert!(result.is_err());
+}

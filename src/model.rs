@@ -64,11 +64,7 @@ impl FromStr for ArchiveFormat {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value
-            .trim_start_matches('.')
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        match value.trim_start_matches('.').to_ascii_lowercase().as_str() {
             "khz" => Ok(Self::Khz),
             "khpak" => Ok(Self::Khpak),
             "khx" => Ok(Self::Khx),

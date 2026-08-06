@@ -38,13 +38,23 @@ struct CreateCommand {
     inputs: Vec<PathBuf>,
     #[arg(short, long)]
     output: PathBuf,
-    #[arg(long, help = "khz, khpak, khx, khaz, or khcz; defaults to output extension")]
+    #[arg(
+        long,
+        help = "khz, khpak, khx, khaz, or khcz; defaults to output extension"
+    )]
     format: Option<String>,
     #[arg(long, default_value = "balanced")]
     mode: String,
-    #[arg(long, help = "Prompt for a password without exposing it in process arguments")]
+    #[arg(
+        long,
+        help = "Prompt for a password without exposing it in process arguments"
+    )]
     password: bool,
-    #[arg(long, value_name = "NAME", help = "Read password from an environment variable")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Read password from an environment variable"
+    )]
     password_env: Option<String>,
     #[arg(long, default_value_t = 104_857_600)]
     split_size: u64,
@@ -84,7 +94,11 @@ struct ReadCommand {
 struct UnlockArgs {
     #[arg(long, help = "Prompt for a password")]
     password: bool,
-    #[arg(long, value_name = "NAME", help = "Read password from an environment variable")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Read password from an environment variable"
+    )]
     password_env: Option<String>,
 }
 

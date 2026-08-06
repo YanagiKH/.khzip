@@ -38,8 +38,7 @@ pub fn compress(
                 CompressionMode::Extreme => 19,
                 CompressionMode::Custom => custom.zstd_level,
             };
-            zstd::stream::encode_all(Cursor::new(data), level)
-                .context("zstd compression failed")?
+            zstd::stream::encode_all(Cursor::new(data), level).context("zstd compression failed")?
         }
         Codec::Brotli => {
             let quality = match mode {
@@ -50,8 +49,7 @@ pub fn compress(
             };
             let mut output = Vec::new();
             {
-                let mut writer =
-                    brotli::CompressorWriter::new(&mut output, 64 * 1024, quality, 22);
+                let mut writer = brotli::CompressorWriter::new(&mut output, 64 * 1024, quality, 22);
                 writer
                     .write_all(data)
                     .context("brotli compression failed")?;
@@ -83,8 +81,9 @@ pub fn compress(
 pub fn decompress(data: &[u8], codec: Codec, expected_len: usize) -> Result<Vec<u8>> {
     let output = match codec {
         Codec::None => data.to_vec(),
-        Codec::Zstd => zstd::stream::decode_all(Cursor::new(data))
-            .context("zstd decompression failed")?,
+        Codec::Zstd => {
+            zstd::stream::decode_all(Cursor::new(data)).context("zstd decompression failed")?
+        }
         Codec::Brotli => {
             let mut decoder = brotli::Decompressor::new(Cursor::new(data), 64 * 1024);
             let mut output = Vec::with_capacity(expected_len);

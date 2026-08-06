@@ -1,9 +1,7 @@
 #![cfg(feature = "gui")]
 
 use eframe::egui;
-use khzip::{
-    create_archive, ArchiveFormat, CompressionMode, CreateOptions, CustomCompression,
-};
+use khzip::{create_archive, ArchiveFormat, CompressionMode, CreateOptions, CustomCompression};
 use std::path::PathBuf;
 
 struct KhzipApp {

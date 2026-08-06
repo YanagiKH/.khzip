@@ -168,7 +168,7 @@ See [docs/GUI.md](docs/GUI.md) for platform details.
 
 ## Security model
 
-Encrypted formats encrypt compressed chunk records and the manifest containing filenames, directory structure, sizes, chunk IDs, and offsets. Every encrypted record has a unique XChaCha20 nonce derived from a random archive prefix and a monotonic record number. Record metadata is bound as associated data. The whole container also has a BLAKE3 corruption checksum.
+Encrypted formats place the codec, plaintext length, BLAKE3 identity, compressed bytes, and manifest inside authenticated ciphertext. Filenames, paths, file sizes, chunk identities, and chunk plaintext lengths are therefore not stored in clear record headers. The container still reveals its version, selected format and mode, encryption flags, record kinds and ordinals, record boundaries, ciphertext lengths, total object size, and manifest location. Every encrypted record has a unique XChaCha20 nonce derived from a random archive prefix and a monotonic record number. Clear framing metadata is bound as associated data. The whole container also has a BLAKE3 corruption checksum.
 
 `.khpak` and unencrypted `.khz`/`.khx` archives provide corruption detection, not authenticity against an attacker who can rewrite the full archive. The trailer checksum is unkeyed and can be recomputed.
 

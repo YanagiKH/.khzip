@@ -16,6 +16,8 @@ const RECORD_MAGIC: &[u8; 4] = b"KHR1";
 const TRAILER_MAGIC: &[u8; 8] = b"KHTRLR01";
 const TRAILER_LEN: usize = 48;
 const RECORD_HEADER_LEN: usize = 64;
+const INNER_METADATA_LEN: usize = 41;
+const MAX_PLAIN_RECORD_LEN: u64 = 256 * 1024 * 1024;
 const RECORD_CHUNK: u8 = 1;
 const RECORD_MANIFEST: u8 = 2;
 
@@ -229,20 +231,29 @@ impl ContainerWriter {
         compressed: &[u8],
     ) -> Result<u64> {
         let offset = self.file.stream_position()?;
+        anyhow::ensure!(
+            plain_len <= MAX_PLAIN_RECORD_LEN,
+            "record plaintext exceeds safety limit"
+        );
+        let encrypted = self.keys.is_some();
         let mut record = RecordHeader {
             kind,
-            codec,
-            flags: 0,
+            codec: if encrypted { Codec::None } else { codec },
+            flags: if encrypted { 1 } else { 0 },
             ordinal: self.ordinal,
-            plain_len,
+            plain_len: if encrypted { 0 } else { plain_len },
             payload_len: 0,
-            content_id: id,
+            content_id: if encrypted { [0_u8; 32] } else { id },
         };
         let payload = if let Some(keys) = &self.keys {
-            record.flags |= 1;
+            let mut inner = Vec::with_capacity(INNER_METADATA_LEN + compressed.len());
+            inner.push(codec as u8);
+            inner.extend_from_slice(&plain_len.to_le_bytes());
+            inner.extend_from_slice(&id);
+            inner.extend_from_slice(compressed);
             let aad = record.aad(&self.header);
             crypto::encrypt(
-                compressed,
+                &inner,
                 keys,
                 &self.header.nonce_prefix1,
                 &self.header.nonce_prefix2,
@@ -260,15 +271,15 @@ impl ContainerWriter {
         Ok(offset)
     }
 
-    pub fn finish(
-        mut self,
-        index_offset: u64,
-        chunk_count: u64,
-        file_count: u64,
-    ) -> Result<()> {
+    pub fn finish(mut self, index_offset: u64, chunk_count: u64, file_count: u64) -> Result<()> {
         self.header.index_offset = index_offset;
-        self.header.chunk_count = chunk_count;
-        self.header.file_count = file_count;
+        if self.header.encrypted() {
+            self.header.chunk_count = 0;
+            self.header.file_count = 0;
+        } else {
+            self.header.chunk_count = chunk_count;
+            self.header.file_count = file_count;
+        }
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(&self.header.encode())?;
         self.file.flush()?;
@@ -366,7 +377,7 @@ impl ContainerReader {
                 .as_ref()
                 .ok_or_else(|| anyhow!("archive is encrypted"))?;
             let aad = record.aad(&self.header);
-            crypto::decrypt(
+            let inner = crypto::decrypt(
                 &payload,
                 keys,
                 &self.header.nonce_prefix1,
@@ -374,9 +385,30 @@ impl ContainerReader {
                 record.ordinal,
                 &aad,
                 self.header.double_encrypted(),
-            )
-            .map(|plain| (record, plain))
+            )?;
+            anyhow::ensure!(
+                inner.len() >= INNER_METADATA_LEN,
+                "encrypted record metadata is truncated"
+            );
+            let codec = Codec::try_from(inner[0])?;
+            let plain_len = u64::from_le_bytes(inner[1..9].try_into()?);
+            anyhow::ensure!(
+                plain_len <= MAX_PLAIN_RECORD_LEN,
+                "record plaintext exceeds safety limit"
+            );
+            let content_id = inner[9..41].try_into()?;
+            let decoded = RecordHeader {
+                codec,
+                plain_len,
+                content_id,
+                ..record
+            };
+            Ok((decoded, inner[INNER_METADATA_LEN..].to_vec()))
         } else {
+            anyhow::ensure!(
+                record.plain_len <= MAX_PLAIN_RECORD_LEN,
+                "record plaintext exceeds safety limit"
+            );
             Ok((record, payload))
         }
     }

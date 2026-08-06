@@ -4,7 +4,7 @@
 
 For password-encrypted `.khz` and `.khx`, `.khaz`, and `.khcz` archives:
 
-- Hide file contents, names, paths, sizes, chunk identities, and index offsets from a cloud provider or storage attacker.
+- Hide file contents, names, paths, file sizes, chunk identities, chunk plaintext lengths, and codec choices from a cloud provider or storage attacker.
 - Detect record modification, reordering, substitution, truncation, and wrong-key use before releasing a record.
 - Detect accidental corruption across the complete container.
 - Prevent archive paths from escaping the selected extraction directory.
@@ -24,6 +24,7 @@ For password-encrypted `.khz` and `.khx`, `.khaz`, and `.khcz` archives:
 - Keyloggers, screen capture, malware, swap/hibernation capture, or a hostile kernel.
 - Weak or reused user passwords.
 - Traffic analysis outside the archive, including cloud object names, upload time, and total object size.
+- Concealing record count, record kind/order, ciphertext length, record boundaries, format/mode flags, or the manifest location.
 - Secure deletion from SSDs, cloud snapshots, or filesystem journals.
 - Authenticity for `.khpak` or other unencrypted archives against an attacker able to recompute hashes.
 - Hardware-enforced non-exportability of `.khcz` keys. The current device key is a protected local file.
