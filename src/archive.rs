@@ -4,8 +4,8 @@ use crate::{
     container::{ContainerReader, ContainerWriter, Header},
     crypto::{self, KeyMaterial},
     model::{
-        ArchiveFormat, ChunkIndex, CompressionMode, CustomCompression, EntryKind, FileEntry, Manifest,
-        DEFAULT_AVG_CHUNK, DEFAULT_MAX_CHUNK, DEFAULT_MIN_CHUNK, FORMAT_VERSION,
+        ArchiveFormat, ChunkIndex, CompressionMode, CustomCompression, EntryKind, FileEntry,
+        Manifest, DEFAULT_AVG_CHUNK, DEFAULT_MAX_CHUNK, DEFAULT_MIN_CHUNK, FORMAT_VERSION,
     },
 };
 use anyhow::{anyhow, Context, Result};
@@ -33,19 +33,37 @@ pub struct CreateOptions {
 impl CreateOptions {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(!self.inputs.is_empty(), "at least one input is required");
-        anyhow::ensure!(self.split_size >= 1024 * 1024, "split size must be at least 1 MiB");
+        anyhow::ensure!(
+            self.split_size >= 1024 * 1024,
+            "split size must be at least 1 MiB"
+        );
         if self.format == ArchiveFormat::Khpak {
-            anyhow::ensure!(self.password.is_none(), ".khpak does not support encryption");
+            anyhow::ensure!(
+                self.password.is_none(),
+                ".khpak does not support encryption"
+            );
         }
         if self.format == ArchiveFormat::Khcz {
-            anyhow::ensure!(self.password.is_none(), ".khcz uses the local device key and does not accept a password");
+            anyhow::ensure!(
+                self.password.is_none(),
+                ".khcz uses the local device key and does not accept a password"
+            );
         }
         if self.format.requires_password() {
-            anyhow::ensure!(self.password.as_deref().is_some_and(|p| p.len() >= 12), ".khaz requires a password of at least 12 characters");
+            anyhow::ensure!(
+                self.password.as_deref().is_some_and(|p| p.len() >= 12),
+                ".khaz requires a password of at least 12 characters"
+            );
         }
         if let Some(password) = &self.password {
-            anyhow::ensure!(self.format.allows_password(), "the selected format does not allow passwords");
-            anyhow::ensure!(password.len() >= 10, "password must contain at least 10 characters");
+            anyhow::ensure!(
+                self.format.allows_password(),
+                "the selected format does not allow passwords"
+            );
+            anyhow::ensure!(
+                password.len() >= 10,
+                "password must contain at least 10 characters"
+            );
         }
         for input in &self.inputs {
             anyhow::ensure!(input.exists(), "input does not exist: {}", input.display());
@@ -100,23 +118,36 @@ pub fn create_archive(options: &CreateOptions) -> Result<ArchiveSummary> {
             continue;
         }
         let mut ids = Vec::new();
-        let file = File::open(&source.source).with_context(|| format!("cannot open {}", source.source.display()))?;
+        let file = File::open(&source.source)
+            .with_context(|| format!("cannot open {}", source.source.display()))?;
         let mut reader = BufReader::new(file);
         stream_chunks(&mut reader, chunk_config, |chunk| {
-            original_bytes = original_bytes.checked_add(chunk.len() as u64).ok_or_else(|| anyhow!("archive size overflow"))?;
+            original_bytes = original_bytes
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| anyhow!("archive size overflow"))?;
             let id = *blake3::hash(chunk).as_bytes();
             ids.push(id);
             if let std::collections::hash_map::Entry::Vacant(entry) = chunk_lookup.entry(id) {
                 let preferred = choose_codec(chunk, effective_mode);
                 let mut stored = compress(chunk, preferred, effective_mode, &options.custom)?;
-                let codec = if stored.len() == chunk.len() { crate::model::Codec::None } else { preferred };
+                let codec = if stored.len() == chunk.len() {
+                    crate::model::Codec::None
+                } else {
+                    preferred
+                };
                 if codec == crate::model::Codec::None {
                     stored.clear();
                     stored.extend_from_slice(chunk);
                 }
                 let offset = writer.write_chunk(id, chunk.len() as u64, codec, &stored)?;
-                let index = ChunkIndex { id, record_offset: offset, plain_len: chunk.len() as u64 };
-                unique_bytes = unique_bytes.checked_add(chunk.len() as u64).ok_or_else(|| anyhow!("archive size overflow"))?;
+                let index = ChunkIndex {
+                    id,
+                    record_offset: offset,
+                    plain_len: chunk.len() as u64,
+                };
+                unique_bytes = unique_bytes
+                    .checked_add(chunk.len() as u64)
+                    .ok_or_else(|| anyhow!("archive size overflow"))?;
                 chunk_order.push(id);
                 entry.insert(index);
             }
@@ -126,7 +157,10 @@ pub fn create_archive(options: &CreateOptions) -> Result<ArchiveSummary> {
         manifest_files.push(source.into_manifest(ids, size));
     }
 
-    let chunks: Vec<ChunkIndex> = chunk_order.iter().map(|id| chunk_lookup[id].clone()).collect();
+    let chunks: Vec<ChunkIndex> = chunk_order
+        .iter()
+        .map(|id| chunk_lookup[id].clone())
+        .collect();
     let manifest = Manifest {
         version: FORMAT_VERSION,
         format: options.format,
@@ -139,7 +173,11 @@ pub fn create_archive(options: &CreateOptions) -> Result<ArchiveSummary> {
         unique_bytes,
     };
     let index_offset = writer.write_manifest(&manifest)?;
-    writer.finish(index_offset, manifest.chunks.len() as u64, manifest.files.len() as u64)?;
+    writer.finish(
+        index_offset,
+        manifest.chunks.len() as u64,
+        manifest.files.len() as u64,
+    )?;
 
     if options.format.is_split() {
         split_archive(&temp_path, &options.output, options.split_size)?;
@@ -151,7 +189,10 @@ pub fn create_archive(options: &CreateOptions) -> Result<ArchiveSummary> {
     Ok(summary(&manifest))
 }
 
-pub fn list_archive(path: &Path, unlock: &UnlockOptions) -> Result<(ArchiveSummary, Vec<FileEntry>)> {
+pub fn list_archive(
+    path: &Path,
+    unlock: &UnlockOptions,
+) -> Result<(ArchiveSummary, Vec<FileEntry>)> {
     with_joined_archive(path, |actual| {
         let mut reader = open_reader(actual, unlock)?;
         let manifest = reader.read_manifest()?;
@@ -169,39 +210,66 @@ pub fn verify_archive(path: &Path, unlock: &UnlockOptions) -> Result<ArchiveSumm
         for chunk in &manifest.chunks {
             let (id, plain) = reader.read_chunk(chunk.record_offset)?;
             anyhow::ensure!(id == chunk.id, "chunk index mismatch");
-            anyhow::ensure!(plain.len() as u64 == chunk.plain_len, "chunk length mismatch");
+            anyhow::ensure!(
+                plain.len() as u64 == chunk.plain_len,
+                "chunk length mismatch"
+            );
             ids.push(id);
         }
-        anyhow::ensure!(merkle_root(&ids) == manifest.merkle_root, "Merkle root mismatch");
+        anyhow::ensure!(
+            merkle_root(&ids) == manifest.merkle_root,
+            "Merkle root mismatch"
+        );
         Ok(summary(&manifest))
     })
 }
 
-pub fn extract_archive(path: &Path, output: &Path, unlock: &UnlockOptions, overwrite: bool) -> Result<ArchiveSummary> {
+pub fn extract_archive(
+    path: &Path,
+    output: &Path,
+    unlock: &UnlockOptions,
+    overwrite: bool,
+) -> Result<ArchiveSummary> {
     with_joined_archive(path, |actual| {
         let mut reader = open_reader(actual, unlock)?;
         let manifest = reader.read_manifest()?;
         verify_manifest_header(&reader.header, &manifest)?;
         fs::create_dir_all(output)?;
-        let chunks: HashMap<[u8; 32], ChunkIndex> = manifest.chunks.iter().cloned().map(|c| (c.id, c)).collect();
+        let chunks: HashMap<[u8; 32], ChunkIndex> =
+            manifest.chunks.iter().cloned().map(|c| (c.id, c)).collect();
 
-        for entry in manifest.files.iter().filter(|e| e.kind == EntryKind::Directory) {
+        for entry in manifest
+            .files
+            .iter()
+            .filter(|e| e.kind == EntryKind::Directory)
+        {
             let target = safe_join(output, &entry.path)?;
             fs::create_dir_all(target)?;
         }
         for entry in manifest.files.iter().filter(|e| e.kind == EntryKind::File) {
             let target = safe_join(output, &entry.path)?;
             if target.exists() && !overwrite {
-                anyhow::bail!("refusing to overwrite {}; pass --overwrite", target.display());
+                anyhow::bail!(
+                    "refusing to overwrite {}; pass --overwrite",
+                    target.display()
+                );
             }
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let temp = target.with_extension(format!("{}.khzip-part", target.extension().and_then(|e| e.to_str()).unwrap_or_default()));
+            let temp = target.with_extension(format!(
+                "{}.khzip-part",
+                target
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default()
+            ));
             let file = File::create(&temp)?;
             let mut writer = BufWriter::new(file);
             for id in &entry.chunks {
-                let chunk = chunks.get(id).ok_or_else(|| anyhow!("missing chunk index"))?;
+                let chunk = chunks
+                    .get(id)
+                    .ok_or_else(|| anyhow!("missing chunk index"))?;
                 let (actual_id, plain) = reader.read_chunk(chunk.record_offset)?;
                 anyhow::ensure!(&actual_id == id, "chunk id mismatch during extraction");
                 writer.write_all(&plain)?;
@@ -209,7 +277,11 @@ pub fn extract_archive(path: &Path, output: &Path, unlock: &UnlockOptions, overw
             writer.flush()?;
             drop(writer);
             let actual_size = fs::metadata(&temp)?.len();
-            anyhow::ensure!(actual_size == entry.size, "extracted file size mismatch for {}", entry.path);
+            anyhow::ensure!(
+                actual_size == entry.size,
+                "extracted file size mismatch for {}",
+                entry.path
+            );
             if overwrite && target.exists() {
                 fs::remove_file(&target)?;
             }
@@ -230,7 +302,10 @@ fn open_reader(path: &Path, unlock: &UnlockOptions) -> Result<ContainerReader> {
         if header.device_bound() {
             Some(crypto::device_keys(&header.salt)?)
         } else {
-            let password = unlock.password.as_deref().ok_or_else(|| anyhow!("archive password is required"))?;
+            let password = unlock
+                .password
+                .as_deref()
+                .ok_or_else(|| anyhow!("archive password is required"))?;
             Some(crypto::password_keys(password, &header.salt)?)
         }
     } else {
@@ -263,14 +338,24 @@ fn create_keys(header: &Header, password: Option<&str>) -> Result<Option<KeyMate
     if header.device_bound() {
         return Ok(Some(crypto::device_keys(&header.salt)?));
     }
-    password.map(|value| crypto::password_keys(value, &header.salt)).transpose()
+    password
+        .map(|value| crypto::password_keys(value, &header.salt))
+        .transpose()
 }
 
 fn chunk_config(options: &CreateOptions) -> Result<ChunkConfig> {
     let config = if options.mode == CompressionMode::Custom {
-        ChunkConfig { min: options.custom.min_chunk, avg: options.custom.avg_chunk, max: options.custom.max_chunk }
+        ChunkConfig {
+            min: options.custom.min_chunk,
+            avg: options.custom.avg_chunk,
+            max: options.custom.max_chunk,
+        }
     } else {
-        ChunkConfig { min: DEFAULT_MIN_CHUNK, avg: DEFAULT_AVG_CHUNK, max: DEFAULT_MAX_CHUNK }
+        ChunkConfig {
+            min: DEFAULT_MIN_CHUNK,
+            avg: DEFAULT_AVG_CHUNK,
+            max: DEFAULT_MAX_CHUNK,
+        }
     };
     config.validate()
 }
@@ -286,7 +371,14 @@ struct SourceEntry {
 
 impl SourceEntry {
     fn into_manifest(self, chunks: Vec<[u8; 32]>, size: u64) -> FileEntry {
-        FileEntry { path: self.archive_path, kind: self.kind, size, modified_unix: self.modified_unix, unix_mode: self.unix_mode, chunks }
+        FileEntry {
+            path: self.archive_path,
+            kind: self.kind,
+            size,
+            modified_unix: self.modified_unix,
+            unix_mode: self.unix_mode,
+            chunks,
+        }
     }
 }
 
@@ -295,25 +387,62 @@ fn collect_entries(inputs: &[PathBuf]) -> Result<Vec<SourceEntry>> {
     let mut names = HashSet::new();
     for input in inputs {
         let canonical = fs::canonicalize(input)?;
-        let root_name = input.file_name().ok_or_else(|| anyhow!("input has no file name: {}", input.display()))?.to_string_lossy().to_string();
-        anyhow::ensure!(names.insert(root_name.clone()), "duplicate archive root name: {root_name}");
+        let root_name = input
+            .file_name()
+            .ok_or_else(|| anyhow!("input has no file name: {}", input.display()))?
+            .to_string_lossy()
+            .to_string();
+        anyhow::ensure!(
+            names.insert(root_name.clone()),
+            "duplicate archive root name: {root_name}"
+        );
         let metadata = fs::symlink_metadata(&canonical)?;
-        anyhow::ensure!(!metadata.file_type().is_symlink(), "symbolic links are rejected: {}", input.display());
+        anyhow::ensure!(
+            !metadata.file_type().is_symlink(),
+            "symbolic links are rejected: {}",
+            input.display()
+        );
         if metadata.is_file() {
-            entries.push(source_entry(canonical, root_name, EntryKind::File, &metadata));
+            entries.push(source_entry(
+                canonical,
+                root_name,
+                EntryKind::File,
+                &metadata,
+            ));
         } else if metadata.is_dir() {
-            for item in WalkDir::new(&canonical).follow_links(false).sort_by_file_name() {
+            for item in WalkDir::new(&canonical)
+                .follow_links(false)
+                .sort_by_file_name()
+            {
                 let item = item?;
                 let metadata = fs::symlink_metadata(item.path())?;
-                anyhow::ensure!(!metadata.file_type().is_symlink(), "symbolic links are rejected: {}", item.path().display());
+                anyhow::ensure!(
+                    !metadata.file_type().is_symlink(),
+                    "symbolic links are rejected: {}",
+                    item.path().display()
+                );
                 let relative = item.path().strip_prefix(&canonical)?;
                 let archive_path = if relative.as_os_str().is_empty() {
                     root_name.clone()
                 } else {
-                    format!("{root_name}/{}", relative.to_string_lossy().replace('\\', "/"))
+                    format!(
+                        "{root_name}/{}",
+                        relative.to_string_lossy().replace('\\', "/")
+                    )
                 };
-                let kind = if metadata.is_dir() { EntryKind::Directory } else if metadata.is_file() { EntryKind::File } else { continue };
-                entries.push(source_entry(item.path().to_path_buf(), archive_path, kind, &metadata));
+                let kind = if metadata.is_dir() {
+                    EntryKind::Directory
+                } else if metadata.is_file() {
+                    EntryKind::File
+                } else {
+                    continue;
+                };
+                entries.push(source_entry(
+                    item.path().to_path_buf(),
+                    archive_path,
+                    kind,
+                    &metadata,
+                ));
             }
         } else {
             anyhow::bail!("unsupported input type: {}", input.display());
@@ -322,29 +451,57 @@ fn collect_entries(inputs: &[PathBuf]) -> Result<Vec<SourceEntry>> {
     Ok(entries)
 }
 
-fn source_entry(source: PathBuf, archive_path: String, kind: EntryKind, metadata: &fs::Metadata) -> SourceEntry {
+fn source_entry(
+    source: PathBuf,
+    archive_path: String,
+    kind: EntryKind,
+    metadata: &fs::Metadata,
+) -> SourceEntry {
     SourceEntry {
         source,
         archive_path,
         kind,
-        modified_unix: metadata.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64),
+        modified_unix: metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs() as i64),
         unix_mode: unix_mode(metadata),
     }
 }
 
 fn verify_manifest_header(header: &Header, manifest: &Manifest) -> Result<()> {
-    anyhow::ensure!(manifest.version == FORMAT_VERSION, "unsupported manifest version");
-    anyhow::ensure!(manifest.format == header.format, "header and manifest format mismatch");
-    anyhow::ensure!(manifest.mode == header.mode, "header and manifest mode mismatch");
-    anyhow::ensure!(manifest.files.len() as u64 == header.file_count, "file count mismatch");
-    anyhow::ensure!(manifest.chunks.len() as u64 == header.chunk_count, "chunk count mismatch");
+    anyhow::ensure!(
+        manifest.version == FORMAT_VERSION,
+        "unsupported manifest version"
+    );
+    anyhow::ensure!(
+        manifest.format == header.format,
+        "header and manifest format mismatch"
+    );
+    anyhow::ensure!(
+        manifest.mode == header.mode,
+        "header and manifest mode mismatch"
+    );
+    anyhow::ensure!(
+        manifest.files.len() as u64 == header.file_count,
+        "file count mismatch"
+    );
+    anyhow::ensure!(
+        manifest.chunks.len() as u64 == header.chunk_count,
+        "chunk count mismatch"
+    );
     Ok(())
 }
 
 fn summary(manifest: &Manifest) -> ArchiveSummary {
     ArchiveSummary {
         format: manifest.format,
-        files: manifest.files.iter().filter(|e| e.kind == EntryKind::File).count(),
+        files: manifest
+            .files
+            .iter()
+            .filter(|e| e.kind == EntryKind::File)
+            .count(),
         chunks: manifest.chunks.len(),
         original_bytes: manifest.original_bytes,
         unique_bytes: manifest.unique_bytes,
@@ -385,13 +542,20 @@ fn safe_join(base: &Path, archive_path: &str) -> Result<PathBuf> {
     let path = Path::new(archive_path);
     anyhow::ensure!(!path.is_absolute(), "archive path is absolute");
     for component in path.components() {
-        anyhow::ensure!(matches!(component, Component::Normal(_)), "unsafe archive path: {archive_path}");
+        anyhow::ensure!(
+            matches!(component, Component::Normal(_)),
+            "unsafe archive path: {archive_path}"
+        );
     }
     Ok(base.join(path))
 }
 
 fn split_archive(source: &Path, output: &Path, split_size: u64) -> Result<()> {
-    let base = if output.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("khx")) {
+    let base = if output
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("khx"))
+    {
         output.to_path_buf()
     } else {
         output.with_extension("khx")
@@ -433,12 +597,18 @@ fn with_joined_archive<T>(path: &Path, operation: impl FnOnce(&Path) -> Result<T
 }
 
 fn is_split_part(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext.len() == 3 && ext.chars().all(|c| c.is_ascii_digit()))
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.len() == 3 && ext.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn join_parts(first: &Path, destination: &Path) -> Result<()> {
     let text = first.to_string_lossy();
-    let base = text.rsplit_once('.').ok_or_else(|| anyhow!("invalid split archive part name"))?.0.to_string();
+    let base = text
+        .rsplit_once('.')
+        .ok_or_else(|| anyhow!("invalid split archive part name"))?
+        .0
+        .to_string();
     let mut writer = BufWriter::new(File::create(destination)?);
     for part in 1_u32.. {
         let path = PathBuf::from(format!("{base}.{part:03}"));
@@ -466,7 +636,9 @@ fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn now_unix() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 #[cfg(unix)]
